@@ -1,11 +1,12 @@
 ## Interface: 11200
 ## Title: WoWTranslate
-## Notes: Real-time Chinese to English translation for WoW 1.12
-## Version: 0.1
+## Notes: Real-time translation for WoW 1.12
+## Version: 0.9
 ## Author: WoWTranslate Team
 ## SavedVariables: WoWTranslateDB WoWTranslateCache WoWTranslateDebugLog
 
 WoWTranslate_Glossary.lua
 WoWTranslate_Cache.lua
 WoWTranslate_API.lua
+WoWTranslate_Config.lua
 WoWTranslate.lua

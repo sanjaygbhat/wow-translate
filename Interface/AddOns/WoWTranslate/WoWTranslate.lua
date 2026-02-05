@@ -34,10 +34,15 @@ local defaults = {
         PARTY = true,
         GUILD = true,
         RAID = true,
-        SAY = false,
-        YELL = false,
+        SAY = true,
+        YELL = true,
     },
-    outgoingPrefix = "[Translated]",
+    outgoingPrefix = "[Translated by WoWTranslate]",
+    -- Language settings (any-to-any translation)
+    incomingFromLang = "zh",
+    incomingToLang = "en",
+    outgoingFromLang = "en",
+    outgoingToLang = "zh",
 }
 
 -- ============================================================================
@@ -776,12 +781,21 @@ local function HookedSendChatMessage(msg, chatType, language, channel)
         return originalSendChatMessage(msg, chatType, language, channel)
     end
 
+    -- Split message into segments (text and hyperlinks) to preserve links
+    local segments = SplitIntoSegments(msg)
+    DebugLog("Outgoing segments:", table.getn(segments))
+
+    -- Build text to translate (hyperlinks replaced with URL placeholders)
+    local textToTranslate = BuildTranslatableText(segments)
+    DebugLog("Outgoing to translate:", textToTranslate)
+
     -- Queue for translation
     outgoingCounter = outgoingCounter + 1
     local queueId = tostring(outgoingCounter)
 
     outgoingQueue[queueId] = {
         originalMsg = msg,
+        segments = segments,  -- Store segments for reconstruction
         chatType = chatType,
         language = language,
         channel = channel,
@@ -795,8 +809,8 @@ local function HookedSendChatMessage(msg, chatType, language, channel)
 
     DebugLog("Outgoing queued:", queueId, msg)
 
-    -- Request translation
-    WoWTranslate_API.TranslateOutgoing(msg, function(translation, err)
+    -- Request translation (send only the text portions, not hyperlinks)
+    WoWTranslate_API.TranslateOutgoing(textToTranslate, function(translation, err)
         local queued = outgoingQueue[queueId]
         if not queued then
             DebugLog("Outgoing callback but queue item gone:", queueId)
@@ -807,12 +821,13 @@ local function HookedSendChatMessage(msg, chatType, language, channel)
         if translation then
             DebugLog("Outgoing translation received:", translation)
 
-            -- Remove pipe chars (break WoW chat formatting)
-            translation = string.gsub(translation, "|", "")
+            -- Reconstruct message with original hyperlinks
+            local reconstructed = ReconstructMessage(queued.segments, translation)
+            DebugLog("Outgoing reconstructed:", reconstructed)
 
             -- Build message with prefix
             local prefix = WoWTranslateDB.outgoingPrefix or "[Translated]"
-            local finalMsg = prefix .. " " .. translation
+            local finalMsg = prefix .. " " .. reconstructed
 
             -- Truncate if over 255 bytes (WoW chat limit)
             if string.len(finalMsg) > 255 then
@@ -1109,18 +1124,28 @@ SlashCmdList["WOWTRANSLATE"] = function(msg)
             end
         end)
 
+    -- =====================================================================
+    -- CONFIGURATION UI COMMANDS
+    -- =====================================================================
+    elseif cmd == "show" or cmd == "config" or cmd == "options" then
+        WoWTranslate_ShowConfig()
+
+    elseif cmd == "hide" then
+        WoWTranslate_HideConfig()
+
     else
         DEFAULT_CHAT_FRAME:AddMessage("[WoWTranslate] Commands:")
+        DEFAULT_CHAT_FRAME:AddMessage("  /wt show - Open configuration panel")
+        DEFAULT_CHAT_FRAME:AddMessage("  /wt hide - Close configuration panel")
         DEFAULT_CHAT_FRAME:AddMessage("  /wt on|off - Enable/disable incoming translation")
         DEFAULT_CHAT_FRAME:AddMessage("  /wt key <apikey> - Set API key")
         DEFAULT_CHAT_FRAME:AddMessage("  /wt status - Show status")
         DEFAULT_CHAT_FRAME:AddMessage("  /wt clearcache - Clear cache")
         DEFAULT_CHAT_FRAME:AddMessage("  /wt debug - Toggle debug mode")
-        DEFAULT_CHAT_FRAME:AddMessage("  -- Outgoing (EN -> CN) --")
+        DEFAULT_CHAT_FRAME:AddMessage("  -- Outgoing --")
         DEFAULT_CHAT_FRAME:AddMessage("  /wt outgoing on|off - Toggle outgoing translation")
         DEFAULT_CHAT_FRAME:AddMessage("  /wt outchannel [type] - Show/toggle channel settings")
         DEFAULT_CHAT_FRAME:AddMessage("  /wt prefix <text> - Set message prefix")
-        DEFAULT_CHAT_FRAME:AddMessage("  /wt testout [text] - Test EN->CN translation")
     end
 end
 
@@ -1160,7 +1185,7 @@ local function OnAddonLoaded()
     local cacheCount = WoWTranslate_CacheStats().entries
     local dllStatus = dllOk and "|cFF00FF00DLL OK|r" or "|cFFFFFF00DLL not loaded|r"
 
-    DEFAULT_CHAT_FRAME:AddMessage("|cFF00CCFFWoWTranslate|r v0.8 - " .. dllStatus .. " | /wt help")
+    DEFAULT_CHAT_FRAME:AddMessage("|cFF00CCFFWoWTranslate|r v0.9 - " .. dllStatus .. " | /wt show")
 end
 
 local function OnPlayerLogin()

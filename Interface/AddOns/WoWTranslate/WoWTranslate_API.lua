@@ -126,9 +126,11 @@ function WoWTranslate_API.Translate(text, callback)
         timestamp = GetTime()
     }
 
-    -- Send request to DLL
+    -- Send request to DLL with configurable language direction
+    local fromLang = WoWTranslateDB and WoWTranslateDB.incomingFromLang or "zh"
+    local toLang = WoWTranslateDB and WoWTranslateDB.incomingToLang or "en"
     local success, err = pcall(function()
-        UnitXP("WoWTranslate", "translate_async", requestId, text)
+        UnitXP("WoWTranslate", "translate_async", requestId, text, fromLang, toLang)
     end)
 
     if not success then
@@ -271,9 +273,11 @@ function WoWTranslate_API.TranslateOutgoing(text, callback)
         timestamp = GetTime()
     }
 
-    -- Send request to DLL with English -> Chinese direction
+    -- Send request to DLL with configurable language direction
+    local fromLang = WoWTranslateDB and WoWTranslateDB.outgoingFromLang or "en"
+    local toLang = WoWTranslateDB and WoWTranslateDB.outgoingToLang or "zh"
     local success, err = pcall(function()
-        UnitXP("WoWTranslate", "translate_async", requestId, text, "en", "zh")
+        UnitXP("WoWTranslate", "translate_async", requestId, text, fromLang, toLang)
     end)
 
     if not success then
