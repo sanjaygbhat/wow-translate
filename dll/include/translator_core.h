@@ -25,11 +25,14 @@ enum class TranslationResult {
 struct AsyncRequest {
     std::string requestId;
     std::string text;
+    std::string sourceLang;
+    std::string targetLang;
     DWORD timestamp;
 
-    AsyncRequest() : timestamp(0) {}
-    AsyncRequest(const std::string& id, const std::string& t)
-        : requestId(id), text(t), timestamp(GetTickCount()) {}
+    AsyncRequest() : sourceLang("zh"), targetLang("en"), timestamp(0) {}
+    AsyncRequest(const std::string& id, const std::string& t,
+                 const std::string& src = "zh", const std::string& tgt = "en")
+        : requestId(id), text(t), sourceLang(src), targetLang(tgt), timestamp(GetTickCount()) {}
 };
 
 // Async translation result
@@ -78,7 +81,7 @@ private:
     std::string UrlEncode(const std::string& text);
     std::string HttpsRequest(const std::string& host, const std::string& path, const std::string& postData);
     std::string ParseTranslationResponse(const std::string& jsonResponse);
-    std::string GenerateCacheKey(const std::string& text);
+    std::string GenerateCacheKey(const std::string& text, const std::string& sourceLang, const std::string& targetLang);
     void CleanExpiredCache();
 
     // Worker thread function
@@ -92,11 +95,13 @@ public:
     void Cleanup();
     bool IsInitialized() const { return initialized; }
 
-    // Synchronous translation (zh -> en hardcoded)
-    TranslationResult TranslateText(const std::string& text, std::string& result);
+    // Synchronous translation with configurable language direction
+    TranslationResult TranslateText(const std::string& text, std::string& result,
+                                    const std::string& sourceLang = "zh", const std::string& targetLang = "en");
 
-    // Async translation methods
-    bool TranslateAsync(const std::string& requestId, const std::string& text);
+    // Async translation methods with configurable language direction
+    bool TranslateAsync(const std::string& requestId, const std::string& text,
+                        const std::string& sourceLang = "zh", const std::string& targetLang = "en");
     bool PollResult(std::string& requestId, std::string& translation, std::string& error);
     size_t GetPendingCount();
 };

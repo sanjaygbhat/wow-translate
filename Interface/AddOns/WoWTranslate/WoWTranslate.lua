@@ -18,10 +18,26 @@ local originalAddMessage = nil
 local pendingMessages = {}
 local messageCounter = 0
 
+-- Outgoing translation state
+local outgoingQueue = {}
+local outgoingCounter = 0
+local originalSendChatMessage = SendChatMessage
+
 local defaults = {
     enabled = true,
     apiKey = "",
     debugMode = false,
+    -- Outgoing translation settings
+    outgoingEnabled = false,  -- Off by default
+    outgoingChannels = {
+        WHISPER = true,
+        PARTY = true,
+        GUILD = true,
+        RAID = true,
+        SAY = false,
+        YELL = false,
+    },
+    outgoingPrefix = "[Translated]",
 }
 
 -- ============================================================================
@@ -540,6 +556,146 @@ local function CleanupPendingMessages()
 end
 
 -- ============================================================================
+-- OUTGOING TRANSLATION (English -> Chinese)
+-- ============================================================================
+
+-- Clean up queued outgoing messages after timeout
+local function CleanupOutgoingQueue()
+    local now = GetTime()
+    for queueId, item in pairs(outgoingQueue) do
+        if now - item.timestamp > 30 then
+            DebugLog("Outgoing message timed out:", queueId)
+            if originalAddMessage then
+                originalAddMessage(DEFAULT_CHAT_FRAME, "|cFFFF0000[WoWTranslate] Translation timed out, sending original|r")
+            end
+            originalSendChatMessage(item.originalMsg, item.chatType, item.language, item.channel)
+            outgoingQueue[queueId] = nil
+        end
+    end
+end
+
+-- Hooked SendChatMessage for outgoing translation
+local function HookedSendChatMessage(msg, chatType, language, channel)
+    -- Handle nil chatType (WoW 1.12 compatibility)
+    if not chatType then
+        DebugLog("chatType is nil, sending original")
+        return originalSendChatMessage(msg, chatType, language, channel)
+    end
+
+    -- Skip if outgoing disabled
+    if not WoWTranslateDB or not WoWTranslateDB.outgoingEnabled then
+        return originalSendChatMessage(msg, chatType, language, channel)
+    end
+
+    -- Skip if channel not enabled
+    if not WoWTranslateDB.outgoingChannels or not WoWTranslateDB.outgoingChannels[chatType] then
+        DebugLog("Channel not enabled for outgoing:", chatType)
+        return originalSendChatMessage(msg, chatType, language, channel)
+    end
+
+    -- Skip empty messages
+    if not msg or msg == "" then
+        return originalSendChatMessage(msg, chatType, language, channel)
+    end
+
+    -- Skip if already contains Chinese (don't double-translate)
+    if ContainsChinese(msg) then
+        DebugLog("Message already contains Chinese, skipping outgoing translation")
+        return originalSendChatMessage(msg, chatType, language, channel)
+    end
+
+    -- Skip if DLL not available
+    if not WoWTranslate_API or not WoWTranslate_API.IsAvailable() then
+        DebugLog("DLL not available for outgoing translation")
+        return originalSendChatMessage(msg, chatType, language, channel)
+    end
+
+    -- Queue for translation
+    outgoingCounter = outgoingCounter + 1
+    local queueId = tostring(outgoingCounter)
+
+    outgoingQueue[queueId] = {
+        originalMsg = msg,
+        chatType = chatType,
+        language = language,
+        channel = channel,
+        timestamp = GetTime()
+    }
+
+    -- Show local feedback
+    if originalAddMessage then
+        originalAddMessage(DEFAULT_CHAT_FRAME, "|cFFFFFF00[WoWTranslate] Translating...|r")
+    end
+
+    DebugLog("Outgoing queued:", queueId, msg)
+
+    -- Request translation
+    WoWTranslate_API.TranslateOutgoing(msg, function(translation, err)
+        local queued = outgoingQueue[queueId]
+        if not queued then
+            DebugLog("Outgoing callback but queue item gone:", queueId)
+            return
+        end
+        outgoingQueue[queueId] = nil
+
+        if translation then
+            DebugLog("Outgoing translation received:", translation)
+
+            -- Remove pipe chars (break WoW chat formatting)
+            translation = string.gsub(translation, "|", "")
+
+            -- Build message with prefix
+            local prefix = WoWTranslateDB.outgoingPrefix or "[Translated]"
+            local finalMsg = prefix .. " " .. translation
+
+            -- Truncate if over 255 bytes (WoW chat limit)
+            if string.len(finalMsg) > 255 then
+                finalMsg = string.sub(finalMsg, 1, 252) .. "..."
+            end
+
+            originalSendChatMessage(finalMsg, queued.chatType, queued.language, queued.channel)
+
+            if originalAddMessage then
+                originalAddMessage(DEFAULT_CHAT_FRAME, "|cFF00FF00[WoWTranslate] Sent:|r " .. finalMsg)
+            end
+        else
+            -- Translation failed - send original
+            DebugLog("Outgoing translation failed:", err)
+            if originalAddMessage then
+                originalAddMessage(DEFAULT_CHAT_FRAME, "|cFFFF0000[WoWTranslate] Translation failed, sending original|r")
+            end
+            originalSendChatMessage(queued.originalMsg, queued.chatType, queued.language, queued.channel)
+        end
+    end)
+end
+
+-- Track if hook is installed (for diagnostics)
+local outgoingHookInstalled = false
+
+-- Install the outgoing message hook
+local function InstallOutgoingHook()
+    if SendChatMessage ~= HookedSendChatMessage then
+        DebugLog("Installing outgoing SendChatMessage hook")
+        SendChatMessage = HookedSendChatMessage
+        outgoingHookInstalled = true
+    end
+end
+
+-- Remove the outgoing message hook
+local function RemoveOutgoingHook()
+    if SendChatMessage == HookedSendChatMessage then
+        DebugLog("Removing outgoing SendChatMessage hook")
+        SendChatMessage = originalSendChatMessage
+        outgoingHookInstalled = false
+    end
+end
+
+-- Check if hook is active (for diagnostics)
+local function IsOutgoingHookActive()
+    return outgoingHookInstalled and SendChatMessage == HookedSendChatMessage
+end
+
+-- ============================================================================
 -- SLASH COMMANDS
 -- ============================================================================
 SLASH_WOWTRANSLATE1 = "/wt"
@@ -585,14 +741,30 @@ SlashCmdList["WOWTRANSLATE"] = function(msg)
             queuedCount = queuedCount + 1
         end
 
+        local outgoingQueuedCount = 0
+        for _ in pairs(outgoingQueue) do
+            outgoingQueuedCount = outgoingQueuedCount + 1
+        end
+
+        local outgoingStatus = WoWTranslateDB.outgoingEnabled
+            and "|cFF00FF00ON|r"
+            or "|cFFFF0000OFF|r"
+
+        local hookStatus = IsOutgoingHookActive()
+            and "|cFF00FF00ACTIVE|r"
+            or "|cFFFF0000INACTIVE|r"
+
         DEFAULT_CHAT_FRAME:AddMessage("[WoWTranslate] Status:")
         DEFAULT_CHAT_FRAME:AddMessage("  DLL: " .. dllStatus)
-        DEFAULT_CHAT_FRAME:AddMessage("  Enabled: " .. tostring(WoWTranslateDB.enabled))
+        DEFAULT_CHAT_FRAME:AddMessage("  Incoming (CN->EN): " .. (WoWTranslateDB.enabled and "|cFF00FF00ON|r" or "|cFFFF0000OFF|r"))
+        DEFAULT_CHAT_FRAME:AddMessage("  Outgoing (EN->CN): " .. outgoingStatus)
+        DEFAULT_CHAT_FRAME:AddMessage("  Outgoing Hook: " .. hookStatus)
         DEFAULT_CHAT_FRAME:AddMessage("  Glossary entries: " .. glossaryCount)
         DEFAULT_CHAT_FRAME:AddMessage("  Cached translations: " .. cacheStats.entries)
         DEFAULT_CHAT_FRAME:AddMessage("  Cache hit rate: " .. string.format("%.1f%%", cacheStats.hitRate))
         DEFAULT_CHAT_FRAME:AddMessage("  Pending API requests: " .. pendingCount)
-        DEFAULT_CHAT_FRAME:AddMessage("  Queued messages: " .. queuedCount)
+        DEFAULT_CHAT_FRAME:AddMessage("  Queued incoming: " .. queuedCount)
+        DEFAULT_CHAT_FRAME:AddMessage("  Queued outgoing: " .. outgoingQueuedCount)
 
     elseif cmd == "test" then
         local testText = arg or "\228\189\160\229\165\189"
@@ -671,15 +843,89 @@ SlashCmdList["WOWTRANSLATE"] = function(msg)
             DEFAULT_CHAT_FRAME:AddMessage("  Try: /wt testitem with an item ID you've seen (hover over an item link first)")
         end
 
+    -- =====================================================================
+    -- OUTGOING TRANSLATION COMMANDS
+    -- =====================================================================
+    elseif cmd == "outgoing" then
+        if arg == "on" or arg == "enable" then
+            WoWTranslateDB.outgoingEnabled = true
+            InstallOutgoingHook()
+            DEFAULT_CHAT_FRAME:AddMessage("|cFF00FF00[WoWTranslate] Outgoing translation enabled|r")
+            DEFAULT_CHAT_FRAME:AddMessage("  Your English messages will be translated to Chinese")
+        elseif arg == "off" or arg == "disable" then
+            WoWTranslateDB.outgoingEnabled = false
+            RemoveOutgoingHook()
+            DEFAULT_CHAT_FRAME:AddMessage("|cFFFF0000[WoWTranslate] Outgoing translation disabled|r")
+        else
+            local status = WoWTranslateDB.outgoingEnabled and "|cFF00FF00ON|r" or "|cFFFF0000OFF|r"
+            DEFAULT_CHAT_FRAME:AddMessage("[WoWTranslate] Outgoing translation: " .. status)
+            DEFAULT_CHAT_FRAME:AddMessage("  Usage: /wt outgoing on|off")
+        end
+
+    elseif cmd == "outchannel" then
+        if not WoWTranslateDB.outgoingChannels then
+            WoWTranslateDB.outgoingChannels = defaults.outgoingChannels
+        end
+
+        if arg and arg ~= "" then
+            local channelType = string.upper(arg)
+            if WoWTranslateDB.outgoingChannels[channelType] ~= nil then
+                WoWTranslateDB.outgoingChannels[channelType] = not WoWTranslateDB.outgoingChannels[channelType]
+                local newStatus = WoWTranslateDB.outgoingChannels[channelType] and "|cFF00FF00ON|r" or "|cFFFF0000OFF|r"
+                DEFAULT_CHAT_FRAME:AddMessage("[WoWTranslate] Outgoing " .. channelType .. ": " .. newStatus)
+            else
+                DEFAULT_CHAT_FRAME:AddMessage("|cFFFF0000[WoWTranslate] Unknown channel: " .. channelType .. "|r")
+                DEFAULT_CHAT_FRAME:AddMessage("  Valid channels: WHISPER, PARTY, GUILD, RAID, SAY, YELL")
+            end
+        else
+            DEFAULT_CHAT_FRAME:AddMessage("[WoWTranslate] Outgoing channel settings:")
+            for channelType, enabled in pairs(WoWTranslateDB.outgoingChannels) do
+                local status = enabled and "|cFF00FF00ON|r" or "|cFFFF0000OFF|r"
+                DEFAULT_CHAT_FRAME:AddMessage("  " .. channelType .. ": " .. status)
+            end
+            DEFAULT_CHAT_FRAME:AddMessage("  Usage: /wt outchannel <WHISPER|PARTY|GUILD|RAID|SAY|YELL>")
+        end
+
+    elseif cmd == "prefix" then
+        if arg and arg ~= "" then
+            WoWTranslateDB.outgoingPrefix = arg
+            DEFAULT_CHAT_FRAME:AddMessage("[WoWTranslate] Outgoing prefix set to: " .. arg)
+        else
+            DEFAULT_CHAT_FRAME:AddMessage("[WoWTranslate] Current prefix: " .. (WoWTranslateDB.outgoingPrefix or "[Translated]"))
+            DEFAULT_CHAT_FRAME:AddMessage("  Usage: /wt prefix <text>")
+        end
+
+    elseif cmd == "testout" then
+        local testText = arg or "Hello, how are you?"
+        DEFAULT_CHAT_FRAME:AddMessage("[WoWTranslate] Testing outgoing translation (EN->CN):")
+        DEFAULT_CHAT_FRAME:AddMessage("  Input: " .. testText)
+
+        if not WoWTranslate_API.IsAvailable() then
+            DEFAULT_CHAT_FRAME:AddMessage("|cFFFF0000[WoWTranslate] DLL not available|r")
+            return
+        end
+
+        DEFAULT_CHAT_FRAME:AddMessage("[WoWTranslate] Requesting from API...")
+        WoWTranslate_API.TranslateOutgoing(testText, function(result, err)
+            if result then
+                DEFAULT_CHAT_FRAME:AddMessage("|cFF00FF00[WoWTranslate] Translation:|r " .. result)
+            else
+                DEFAULT_CHAT_FRAME:AddMessage("|cFFFF0000[WoWTranslate] Error: " .. (err or "unknown") .. "|r")
+            end
+        end)
+
     else
         DEFAULT_CHAT_FRAME:AddMessage("[WoWTranslate] Commands:")
-        DEFAULT_CHAT_FRAME:AddMessage("  /wt on|off - Enable/disable")
+        DEFAULT_CHAT_FRAME:AddMessage("  /wt on|off - Enable/disable incoming translation")
         DEFAULT_CHAT_FRAME:AddMessage("  /wt key <apikey> - Set API key")
         DEFAULT_CHAT_FRAME:AddMessage("  /wt status - Show status")
         DEFAULT_CHAT_FRAME:AddMessage("  /wt clearcache - Clear cache")
         DEFAULT_CHAT_FRAME:AddMessage("  /wt debug - Toggle debug mode")
-        DEFAULT_CHAT_FRAME:AddMessage("  /wt testlink - Test hyperlink parsing")
-        DEFAULT_CHAT_FRAME:AddMessage("  /wt testitem [id] - Test item localization")
+        DEFAULT_CHAT_FRAME:AddMessage("  -- Outgoing (EN -> CN) --")
+        DEFAULT_CHAT_FRAME:AddMessage("  /wt outgoing on|off - Toggle outgoing translation")
+        DEFAULT_CHAT_FRAME:AddMessage("  /wt outchannel [type] - Show/toggle channel settings")
+        DEFAULT_CHAT_FRAME:AddMessage("  /wt prefix <text> - Set message prefix")
+        DEFAULT_CHAT_FRAME:AddMessage("  /wt testout [text] - Test EN->CN translation")
     end
 end
 
@@ -734,6 +980,11 @@ local function OnPlayerLogin()
             end
         end
     end
+
+    -- Install outgoing hook if enabled
+    if WoWTranslateDB and WoWTranslateDB.outgoingEnabled then
+        InstallOutgoingHook()
+    end
 end
 
 -- ============================================================================
@@ -758,5 +1009,6 @@ cleanupFrame:SetScript("OnUpdate", function()
     if cleanupElapsed >= 5 then
         cleanupElapsed = 0
         CleanupPendingMessages()
+        CleanupOutgoingQueue()
     end
 end)

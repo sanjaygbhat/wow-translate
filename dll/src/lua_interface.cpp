@@ -176,11 +176,20 @@ int __fastcall detoured_UnitXP(void* L) {
                     }
 
                     // TRANSLATE_ASYNC - Queue async translation request
-                    // Args: requestId, text
+                    // Args: requestId, text, [sourceLang], [targetLang]
+                    // Optional language params default to zh->en for backward compatibility
                     else if (subcmd == "translate_async") {
                         if (lua_gettop(L) >= 4) {
                             string requestId{ lua_tostring(L, 3) };
                             string text{ lua_tostring(L, 4) };
+
+                            // Optional language parameters (default zh->en for backward compat)
+                            string sourceLang = "zh";
+                            string targetLang = "en";
+                            if (lua_gettop(L) >= 6) {
+                                sourceLang = lua_tostring(L, 5);
+                                targetLang = lua_tostring(L, 6);
+                            }
 
                             if (!g_translator || !g_translator->IsInitialized()) {
                                 lua_pushstring(L, "error|translator not initialized");
@@ -192,9 +201,9 @@ int __fastcall detoured_UnitXP(void* L) {
                                 return 1;
                             }
 
-                            if (g_translator->TranslateAsync(requestId, text)) {
+                            if (g_translator->TranslateAsync(requestId, text, sourceLang, targetLang)) {
                                 lua_pushstring(L, "ok");
-                                LOG_DEBUG("Async translation queued: " + requestId);
+                                LOG_DEBUG("Async translation queued: " + requestId + " (" + sourceLang + " -> " + targetLang + ")");
                             } else {
                                 lua_pushstring(L, "error|failed to queue request");
                             }
@@ -226,9 +235,18 @@ int __fastcall detoured_UnitXP(void* L) {
                     }
 
                     // TRANSLATE (synchronous) - For testing
+                    // Args: text, [sourceLang], [targetLang]
                     else if (subcmd == "translate") {
                         if (lua_gettop(L) >= 3) {
                             string text{ lua_tostring(L, 3) };
+
+                            // Optional language parameters (default zh->en for backward compat)
+                            string sourceLang = "zh";
+                            string targetLang = "en";
+                            if (lua_gettop(L) >= 5) {
+                                sourceLang = lua_tostring(L, 4);
+                                targetLang = lua_tostring(L, 5);
+                            }
 
                             if (!g_translator || !g_translator->IsInitialized()) {
                                 lua_pushstring(L, "error|translator not initialized");
@@ -236,7 +254,7 @@ int __fastcall detoured_UnitXP(void* L) {
                             }
 
                             string result;
-                            TranslationResult tr = g_translator->TranslateText(text, result);
+                            TranslationResult tr = g_translator->TranslateText(text, result, sourceLang, targetLang);
 
                             if (tr == TranslationResult::SUCCESS) {
                                 lua_pushstring(L, result);

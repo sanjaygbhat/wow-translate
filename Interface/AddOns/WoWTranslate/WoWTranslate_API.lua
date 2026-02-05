@@ -240,6 +240,54 @@ function WoWTranslate_API.StopPolling()
 end
 
 -- ============================================================================
+-- OUTGOING TRANSLATION (English -> Chinese)
+-- ============================================================================
+
+-- Request an async outgoing translation (en -> zh)
+-- callback(translation, error) will be called when complete
+function WoWTranslate_API.TranslateOutgoing(text, callback)
+    if not dllAvailable then
+        if callback then
+            callback(nil, "DLL not available")
+        end
+        return false
+    end
+
+    if not text or text == "" then
+        if callback then
+            callback(nil, "Empty text")
+        end
+        return false
+    end
+
+    -- Generate unique request ID with "out_" prefix to distinguish from incoming
+    requestCounter = requestCounter + 1
+    local requestId = "out_" .. tostring(requestCounter)
+
+    -- Store pending request
+    pendingRequests[requestId] = {
+        callback = callback,
+        text = text,
+        timestamp = GetTime()
+    }
+
+    -- Send request to DLL with English -> Chinese direction
+    local success, err = pcall(function()
+        UnitXP("WoWTranslate", "translate_async", requestId, text, "en", "zh")
+    end)
+
+    if not success then
+        pendingRequests[requestId] = nil
+        if callback then
+            callback(nil, "DLL call failed: " .. tostring(err))
+        end
+        return false
+    end
+
+    return true, requestId
+end
+
+-- ============================================================================
 -- DEBUG FUNCTIONS
 -- ============================================================================
 

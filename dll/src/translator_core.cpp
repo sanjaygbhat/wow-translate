@@ -246,9 +246,9 @@ string TranslationClient::UrlEncode(const string& text) {
     return encoded.str();
 }
 
-string TranslationClient::GenerateCacheKey(const string& text) {
-    // Hardcoded zh->en, so just use text as key
-    return "zh->en:" + text;
+string TranslationClient::GenerateCacheKey(const string& text, const string& sourceLang, const string& targetLang) {
+    // Include language direction in cache key
+    return sourceLang + "->" + targetLang + ":" + text;
 }
 
 void TranslationClient::CleanExpiredCache() {
@@ -330,8 +330,9 @@ string TranslationClient::ParseTranslationResponse(const string& jsonResponse) {
     return SimpleJsonParser::extractTranslatedText(jsonResponse);
 }
 
-// Synchronous translation (zh -> en hardcoded)
-TranslationResult TranslationClient::TranslateText(const string& text, string& result) {
+// Synchronous translation with configurable language direction
+TranslationResult TranslationClient::TranslateText(const string& text, string& result,
+                                                   const string& sourceLang, const string& targetLang) {
     if (!initialized) {
         LOG_ERROR("Translation client not initialized");
         return TranslationResult::INVALID_PARAMS;
@@ -343,7 +344,7 @@ TranslationResult TranslationClient::TranslateText(const string& text, string& r
     }
 
     // Check cache first
-    string cacheKey = GenerateCacheKey(text);
+    string cacheKey = GenerateCacheKey(text, sourceLang, targetLang);
     auto cacheIt = cache.find(cacheKey);
     if (cacheIt != cache.end() && (GetTickCount() - cacheIt->second.timestamp) < CACHE_EXPIRY_MS) {
         result = cacheIt->second.translation;
@@ -354,17 +355,17 @@ TranslationResult TranslationClient::TranslateText(const string& text, string& r
     // Clean expired cache entries periodically
     CleanExpiredCache();
 
-    // Build request body - hardcoded zh -> en
+    // Build request body with dynamic source/target languages
     string requestBody = "{"
         "\"q\":\"" + text + "\","
-        "\"source\":\"zh\","
-        "\"target\":\"en\","
+        "\"source\":\"" + sourceLang + "\","
+        "\"target\":\"" + targetLang + "\","
         "\"format\":\"text\""
         "}";
 
     string path = "/language/translate/v2?key=" + apiKey;
 
-    LOG_DEBUG("Making translation request for: " + text);
+    LOG_DEBUG("Making translation request for: " + text + " (" + sourceLang + " -> " + targetLang + ")");
 
     // Make HTTP request
     string response = HttpsRequest("translation.googleapis.com", path, requestBody);
@@ -393,15 +394,16 @@ TranslationResult TranslationClient::TranslateText(const string& text, string& r
     return TranslationResult::SUCCESS;
 }
 
-// Queue async translation request
-bool TranslationClient::TranslateAsync(const string& requestId, const string& text) {
+// Queue async translation request with configurable language direction
+bool TranslationClient::TranslateAsync(const string& requestId, const string& text,
+                                       const string& sourceLang, const string& targetLang) {
     if (!initialized || !running) {
         return false;
     }
 
     lock_guard<mutex> lock(requestMutex);
-    requestQueue.push(AsyncRequest(requestId, text));
-    LOG_DEBUG("Async request queued: " + requestId);
+    requestQueue.push(AsyncRequest(requestId, text, sourceLang, targetLang));
+    LOG_DEBUG("Async request queued: " + requestId + " (" + sourceLang + " -> " + targetLang + ")");
     return true;
 }
 
@@ -452,7 +454,7 @@ void TranslationClient::WorkerThreadFunc() {
             string translation;
             string error;
 
-            TranslationResult tr = TranslateText(request.text, translation);
+            TranslationResult tr = TranslateText(request.text, translation, request.sourceLang, request.targetLang);
 
             if (tr != TranslationResult::SUCCESS) {
                 switch (tr) {
