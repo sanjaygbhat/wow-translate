@@ -73,7 +73,7 @@ jobs:
       run: |
         mkdir -p release/WoWTranslate
         cp -r Interface/AddOns/WoWTranslate/* release/WoWTranslate/
-        cp release/WoWTranslate.dll release/
+        ls -la release/
 
     - name: Create release zip
       working-directory: release
