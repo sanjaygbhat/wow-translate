@@ -1,0 +1,33 @@
+# Build outputs
+dll/build/
+*.dll
+*.exe
+*.obj
+*.pdb
+*.ilk
+
+# IDE files
+.vs/
+.vscode/
+*.sln
+*.vcxproj*
+CMakeCache.txt
+CMakeFiles/
+cmake_install.cmake
+
+# macOS
+.DS_Store
+*.swp
+
+# Downloaded/cloned source (we have our own modified version)
+dll-source/
+
+# Release artifacts
+release/
+*.zip
+
+# Logs
+*.log
+
+# WoW SavedVariables (for testing)
+WTF/

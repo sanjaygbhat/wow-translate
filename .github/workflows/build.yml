@@ -1,0 +1,87 @@
+name: Build WoWTranslate DLL
+
+on:
+  push:
+    branches: [ main, master ]
+    paths:
+      - 'dll/**'
+      - '.github/workflows/build.yml'
+  pull_request:
+    branches: [ main, master ]
+  workflow_dispatch:  # Allow manual trigger
+
+jobs:
+  build:
+    runs-on: windows-latest
+
+    steps:
+    - name: Checkout repository
+      uses: actions/checkout@v4
+
+    - name: Setup CMake
+      uses: lukka/get-cmake@latest
+
+    - name: Configure CMake (32-bit)
+      working-directory: dll
+      run: |
+        mkdir build
+        cd build
+        cmake .. -G "Visual Studio 17 2022" -A Win32
+
+    - name: Build Release
+      working-directory: dll/build
+      run: cmake --build . --config Release
+
+    - name: List build output
+      working-directory: dll/build
+      run: |
+        echo "Build output:"
+        dir bin\Release\ /s
+
+    - name: Upload DLL artifact
+      uses: actions/upload-artifact@v4
+      with:
+        name: WoWTranslate-DLL
+        path: dll/build/bin/Release/WoWTranslate.dll
+        if-no-files-found: error
+
+    - name: Upload full addon package
+      uses: actions/upload-artifact@v4
+      with:
+        name: WoWTranslate-Full
+        path: |
+          dll/build/bin/Release/WoWTranslate.dll
+          Interface/AddOns/WoWTranslate/
+        if-no-files-found: error
+
+  release:
+    needs: build
+    runs-on: ubuntu-latest
+    if: github.event_name == 'push' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master')
+
+    steps:
+    - name: Checkout repository
+      uses: actions/checkout@v4
+
+    - name: Download DLL artifact
+      uses: actions/download-artifact@v4
+      with:
+        name: WoWTranslate-DLL
+        path: release/
+
+    - name: Copy addon files
+      run: |
+        mkdir -p release/WoWTranslate
+        cp -r Interface/AddOns/WoWTranslate/* release/WoWTranslate/
+        cp release/WoWTranslate.dll release/
+
+    - name: Create release zip
+      working-directory: release
+      run: |
+        zip -r WoWTranslate-v0.1.zip WoWTranslate.dll WoWTranslate/
+
+    - name: Upload release zip
+      uses: actions/upload-artifact@v4
+      with:
+        name: WoWTranslate-Release
+        path: release/WoWTranslate-v0.1.zip
