@@ -23,17 +23,46 @@ local defaults = {
 }
 
 -- ============================================================================
+-- LUA 5.0 COMPATIBILITY
+-- ============================================================================
+-- strsplit is not available in WoW 1.12, implement it
+local function strsplit(delimiter, text, limit)
+    if not text then return nil end
+    if not delimiter or delimiter == "" then return text end
+
+    local result = {}
+    local count = 0
+    local start = 1
+    local delimStart, delimEnd = string.find(text, delimiter, start, true)
+
+    while delimStart do
+        count = count + 1
+        if limit and count >= limit then
+            break
+        end
+        table.insert(result, string.sub(text, start, delimStart - 1))
+        start = delimEnd + 1
+        delimStart, delimEnd = string.find(text, delimiter, start, true)
+    end
+
+    table.insert(result, string.sub(text, start))
+    return unpack(result)
+end
+
+-- ============================================================================
 -- DEBUG LOGGING
 -- ============================================================================
-local function DebugLog(...)
+local function DebugLog(a1, a2, a3, a4, a5)
     if not DEBUG_MODE then return end
 
     local msg = ""
-    for i = 1, select("#", ...) do
-        msg = msg .. tostring(select(i, ...)) .. " "
-    end
+    if a1 then msg = msg .. tostring(a1) .. " " end
+    if a2 then msg = msg .. tostring(a2) .. " " end
+    if a3 then msg = msg .. tostring(a3) .. " " end
+    if a4 then msg = msg .. tostring(a4) .. " " end
+    if a5 then msg = msg .. tostring(a5) .. " " end
 
-    local timestamp = date("%H:%M:%S")
+    local timestamp = string.format("%.1f", GetTime())
     local logEntry = "[" .. timestamp .. "] " .. msg
 
     -- Print to chat (yellow color)
@@ -85,6 +114,7 @@ end
 
 -- Display translated message
 local function DisplayTranslation(sender, translation, event)
+    if not WoWTranslateDB then return end
     if not WoWTranslateDB.enabled then return end
     if not WoWTranslateDB.showInChat then return end
 
@@ -99,6 +129,7 @@ end
 -- ============================================================================
 -- Main translation function
 local function TranslateMessage(message, sender, event)
+    if not WoWTranslateDB then return end
     if not WoWTranslateDB.enabled then return end
 
     DebugLog("Processing message from", sender, ":", message)
@@ -169,6 +200,12 @@ SLASH_WOWTRANSLATE1 = "/wt"
 SLASH_WOWTRANSLATE2 = "/wowtranslate"
 
 SlashCmdList["WOWTRANSLATE"] = function(msg)
+    -- Ensure DB exists (safety check)
+    if not WoWTranslateDB then
+        WoWTranslateDB = {}
+        InitializeSettings()
+    end
+
     local cmd, arg = strsplit(" ", msg, 2)
     cmd = string.lower(cmd or "")
 
@@ -244,6 +281,86 @@ SlashCmdList["WOWTRANSLATE"] = function(msg)
         WoWTranslate_CacheClear()
         DEFAULT_CHAT_FRAME:AddMessage("|cFFFFFF00[WoWTranslate] Cache cleared|r")
 
+    elseif cmd == "test1" then
+        -- Glossary test: "Hello" in Chinese
+        local testText = "\228\189\160\229\165\189"  -- 你好
+        DEFAULT_CHAT_FRAME:AddMessage("[WoWTranslate] Test 1 - Glossary test")
+        DEFAULT_CHAT_FRAME:AddMessage("[WoWTranslate] Input: ni hao (Hello)")
+        local result, matchType = WoWTranslate_CheckGlossary(testText)
+        if result then
+            DEFAULT_CHAT_FRAME:AddMessage("|cFF00FF00[WoWTranslate] Result: " .. result .. " (" .. matchType .. ")|r")
+        else
+            DEFAULT_CHAT_FRAME:AddMessage("|cFFFF0000[WoWTranslate] No glossary match|r")
+        end
+
+    elseif cmd == "test2" then
+        -- Glossary test: "LFG Molten Core" in Chinese
+        local testText = "\230\177\130\231\187\132MC"  -- 求组MC
+        DEFAULT_CHAT_FRAME:AddMessage("[WoWTranslate] Test 2 - Glossary test (WoW terms)")
+        DEFAULT_CHAT_FRAME:AddMessage("[WoWTranslate] Input: qiu zu MC (LFG MC)")
+        local result, matchType = WoWTranslate_CheckGlossary(testText)
+        if result then
+            DEFAULT_CHAT_FRAME:AddMessage("|cFF00FF00[WoWTranslate] Result: " .. result .. " (" .. matchType .. ")|r")
+        else
+            DEFAULT_CHAT_FRAME:AddMessage("|cFFFF0000[WoWTranslate] No glossary match|r")
+        end
+
+    elseif cmd == "test3" then
+        -- API test: "The weather is nice today"
+        local testText = "\228\187\138\229\164\169\229\164\169\230\176\148\229\190\136\229\165\189"  -- 今天天气很好
+        DEFAULT_CHAT_FRAME:AddMessage("[WoWTranslate] Test 3 - API test")
+        DEFAULT_CHAT_FRAME:AddMessage("[WoWTranslate] Input: jin tian tian qi hen hao (The weather is nice today)")
+
+        -- Check cache first
+        local cached, found = WoWTranslate_CacheGet(testText)
+        if found then
+            DEFAULT_CHAT_FRAME:AddMessage("|cFF00FF00[WoWTranslate] Cache hit: " .. cached .. "|r")
+            return
+        end
+
+        if not WoWTranslate_API.IsAvailable() then
+            DEFAULT_CHAT_FRAME:AddMessage("|cFFFF0000[WoWTranslate] DLL not available|r")
+            return
+        end
+
+        DEFAULT_CHAT_FRAME:AddMessage("[WoWTranslate] Calling API...")
+        WoWTranslate_API.Translate(testText, function(result, err)
+            if result then
+                DEFAULT_CHAT_FRAME:AddMessage("|cFF00FF00[WoWTranslate] API Result: " .. result .. "|r")
+                WoWTranslate_CacheSave(testText, result)
+            else
+                DEFAULT_CHAT_FRAME:AddMessage("|cFFFF0000[WoWTranslate] API Error: " .. (err or "unknown") .. "|r")
+            end
+        end)
+
+    elseif cmd == "test4" then
+        -- API test: "I need help"
+        local testText = "\230\136\145\233\156\128\232\166\129\229\184\174\229\138\169"  -- 我需要帮助
+        DEFAULT_CHAT_FRAME:AddMessage("[WoWTranslate] Test 4 - API test")
+        DEFAULT_CHAT_FRAME:AddMessage("[WoWTranslate] Input: wo xu yao bang zhu (I need help)")
+
+        -- Check cache first
+        local cached, found = WoWTranslate_CacheGet(testText)
+        if found then
+            DEFAULT_CHAT_FRAME:AddMessage("|cFF00FF00[WoWTranslate] Cache hit: " .. cached .. "|r")
+            return
+        end
+
+        if not WoWTranslate_API.IsAvailable() then
+            DEFAULT_CHAT_FRAME:AddMessage("|cFFFF0000[WoWTranslate] DLL not available|r")
+            return
+        end
+
+        DEFAULT_CHAT_FRAME:AddMessage("[WoWTranslate] Calling API...")
+        WoWTranslate_API.Translate(testText, function(result, err)
+            if result then
+                DEFAULT_CHAT_FRAME:AddMessage("|cFF00FF00[WoWTranslate] API Result: " .. result .. "|r")
+                WoWTranslate_CacheSave(testText, result)
+            else
+                DEFAULT_CHAT_FRAME:AddMessage("|cFFFF0000[WoWTranslate] API Error: " .. (err or "unknown") .. "|r")
+            end
+        end)
+
     elseif cmd == "debug" then
         DEBUG_MODE = not DEBUG_MODE
         WoWTranslateDB.debugMode = DEBUG_MODE
@@ -267,6 +384,10 @@ SlashCmdList["WOWTRANSLATE"] = function(msg)
         DEFAULT_CHAT_FRAME:AddMessage("  /wt key <apikey> - Set Google API key")
         DEFAULT_CHAT_FRAME:AddMessage("  /wt status - Show status and statistics")
         DEFAULT_CHAT_FRAME:AddMessage("  /wt test [text] - Test translation")
+        DEFAULT_CHAT_FRAME:AddMessage("  /wt test1 - Test glossary (Hello)")
+        DEFAULT_CHAT_FRAME:AddMessage("  /wt test2 - Test glossary (LFG MC)")
+        DEFAULT_CHAT_FRAME:AddMessage("  /wt test3 - Test API (weather)")
+        DEFAULT_CHAT_FRAME:AddMessage("  /wt test4 - Test API (need help)")
         DEFAULT_CHAT_FRAME:AddMessage("  /wt clearcache - Clear translation cache")
         DEFAULT_CHAT_FRAME:AddMessage("  /wt debug - Toggle debug mode")
         DEFAULT_CHAT_FRAME:AddMessage("  /wt log - Show recent debug log")
@@ -278,6 +399,14 @@ end
 -- ADDON INITIALIZATION
 -- ============================================================================
 local function InitializeSettings()
+    -- Ensure SavedVariables exist (WoW 1.12 may not have initialized them yet)
+    if not WoWTranslateDB then
+        WoWTranslateDB = {}
+    end
+    if not WoWTranslateDebugLog then
+        WoWTranslateDebugLog = {}
+    end
+
     -- Apply defaults for any missing settings
     for key, value in pairs(defaults) do
         if WoWTranslateDB[key] == nil then
@@ -344,7 +473,7 @@ eventFrame:SetScript("OnEvent", function()
             WoWTranslate_API.CheckDLL()
             if WoWTranslate_API.IsAvailable() then
                 WoWTranslate_API.StartPolling()
-                if WoWTranslateDB.apiKey and WoWTranslateDB.apiKey ~= "" then
+                if WoWTranslateDB and WoWTranslateDB.apiKey and WoWTranslateDB.apiKey ~= "" then
                     WoWTranslate_API.SetKey(WoWTranslateDB.apiKey)
                 end
             end

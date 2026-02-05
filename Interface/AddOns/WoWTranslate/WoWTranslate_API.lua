@@ -15,6 +15,33 @@ local POLL_INTERVAL = 0.1  -- Poll every 100ms
 local REQUEST_TIMEOUT = 30 -- Timeout requests after 30 seconds
 
 -- ============================================================================
+-- LUA 5.0 COMPATIBILITY
+-- ============================================================================
+-- strsplit is not available in WoW 1.12, implement it
+local function strsplit(delimiter, text, limit)
+    if not text then return nil end
+    if not delimiter or delimiter == "" then return text end
+
+    local result = {}
+    local count = 0
+    local start = 1
+    local delimStart, delimEnd = string.find(text, delimiter, start, true)
+
+    while delimStart do
+        count = count + 1
+        if limit and count >= limit then
+            break
+        end
+        table.insert(result, string.sub(text, start, delimStart - 1))
+        start = delimEnd + 1
+        delimStart, delimEnd = string.find(text, delimiter, start, true)
+    end
+
+    table.insert(result, string.sub(text, start))
+    return unpack(result)
+end
+
+-- ============================================================================
 -- DLL STATUS FUNCTIONS
 -- ============================================================================
 
