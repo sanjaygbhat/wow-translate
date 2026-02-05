@@ -156,20 +156,48 @@ local function PollTranslations()
 
     if success and result and result ~= "" then
         -- Parse result: "requestId|translation|error"
-        local parts = { strsplit("|", result) }
-        local requestId = parts[1]
-        local translation = parts[2]
-        local err = parts[3]
+        -- Translation may contain |, so parse carefully:
+        -- 1. Find first | to get requestId
+        -- 2. Find last | to get error
+        -- 3. Everything in between is translation
 
-        if requestId and pendingRequests[requestId] then
-            local req = pendingRequests[requestId]
-            pendingRequests[requestId] = nil
+        local firstPipe = string.find(result, "|", 1, true)
+        if firstPipe then
+            local requestId = string.sub(result, 1, firstPipe - 1)
+            local remainder = string.sub(result, firstPipe + 1)
 
-            if req.callback then
-                if err and err ~= "" then
-                    req.callback(nil, err)
+            -- Find last pipe in remainder for error field
+            local lastPipe = nil
+            local searchPos = 1
+            while true do
+                local pos = string.find(remainder, "|", searchPos, true)
+                if pos then
+                    lastPipe = pos
+                    searchPos = pos + 1
                 else
-                    req.callback(translation, nil)
+                    break
+                end
+            end
+
+            local translation, err
+            if lastPipe then
+                translation = string.sub(remainder, 1, lastPipe - 1)
+                err = string.sub(remainder, lastPipe + 1)
+            else
+                translation = remainder
+                err = ""
+            end
+
+            if requestId and pendingRequests[requestId] then
+                local req = pendingRequests[requestId]
+                pendingRequests[requestId] = nil
+
+                if req.callback then
+                    if err and err ~= "" then
+                        req.callback(nil, err)
+                    else
+                        req.callback(translation, nil)
+                    end
                 end
             end
         end

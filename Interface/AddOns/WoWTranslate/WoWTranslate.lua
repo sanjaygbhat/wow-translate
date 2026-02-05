@@ -13,19 +13,20 @@ WoWTranslateDebugLog = WoWTranslateDebugLog or {}
 -- ============================================================================
 local DEBUG_MODE = false
 local addonLoaded = false
+local originalAddMessage = nil
 
--- Default settings
+local pendingMessages = {}
+local messageCounter = 0
+
 local defaults = {
     enabled = true,
     apiKey = "",
-    showInChat = true,       -- Show translations in chat frame
     debugMode = false,
 }
 
 -- ============================================================================
 -- LUA 5.0 COMPATIBILITY
 -- ============================================================================
--- strsplit is not available in WoW 1.12, implement it
 local function strsplit(delimiter, text, limit)
     if not text then return nil end
     if not delimiter or delimiter == "" then return text end
@@ -65,13 +66,12 @@ local function DebugLog(a1, a2, a3, a4, a5)
     local timestamp = string.format("%.1f", GetTime())
     local logEntry = "[" .. timestamp .. "] " .. msg
 
-    -- Print to chat (yellow color)
-    DEFAULT_CHAT_FRAME:AddMessage("|cFFFFFF00[WT-DEBUG] " .. msg .. "|r")
+    if originalAddMessage then
+        originalAddMessage(DEFAULT_CHAT_FRAME, "|cFFFFFF00[WT-DEBUG] " .. msg .. "|r")
+    end
 
-    -- Save to log table (persists via SavedVariables)
     table.insert(WoWTranslateDebugLog, logEntry)
 
-    -- Keep only last 500 entries
     while table.getn(WoWTranslateDebugLog) > 500 do
         table.remove(WoWTranslateDebugLog, 1)
     end
@@ -80,12 +80,10 @@ end
 -- ============================================================================
 -- CHINESE CHARACTER DETECTION
 -- ============================================================================
--- Detect if text contains Chinese characters (CJK Unicode range)
 local function ContainsChinese(text)
     if not text then return false end
     for i = 1, string.len(text) do
         local byte = string.byte(text, i)
-        -- UTF-8 Chinese characters start with bytes 0xE4-0xE9 (228-233)
         if byte >= 228 and byte <= 233 then
             return true
         end
@@ -94,103 +92,451 @@ local function ContainsChinese(text)
 end
 
 -- ============================================================================
--- DISPLAY FUNCTIONS
+-- HYPERLINK LOCALIZATION
 -- ============================================================================
--- Get chat color for different event types
-local function GetChatColor(event)
-    local colors = {
-        ["CHAT_MSG_SAY"] = "|cFFFFFFFF",           -- White
-        ["CHAT_MSG_YELL"] = "|cFFFF4040",          -- Red
-        ["CHAT_MSG_WHISPER"] = "|cFFFF80FF",       -- Pink
-        ["CHAT_MSG_PARTY"] = "|cFFAAAAFF",         -- Light blue
-        ["CHAT_MSG_RAID"] = "|cFFFF7F00",          -- Orange
-        ["CHAT_MSG_RAID_LEADER"] = "|cFFFF4800",   -- Dark orange
-        ["CHAT_MSG_GUILD"] = "|cFF40FF40",         -- Green
-        ["CHAT_MSG_OFFICER"] = "|cFF40C040",       -- Dark green
-        ["CHAT_MSG_CHANNEL"] = "|cFFFFB0B0",       -- Light pink
-    }
-    return colors[event] or "|cFFCCCCCC"
+-- Parse hyperlinks and replace Chinese display names with English equivalents
+-- using the client's GetItemInfo() API
+
+-- Parse a hyperlink to extract its components
+-- Returns: linkType, linkData, displayText, colorCode (or nils if parse fails)
+local function ParseHyperlink(link)
+    local colorCode = nil
+    local linkType = nil
+    local linkData = nil
+    local displayText = nil
+
+    -- Check for colored link: |cFFRRGGBB|H...
+    local colorStart = string.find(link, "^|c%x%x%x%x%x%x%x%x")
+    if colorStart then
+        colorCode = string.sub(link, 3, 10)  -- Extract FFRRGGBB
+    end
+
+    -- Find |H to start of link data
+    local hStart, hEnd = string.find(link, "|H")
+    if not hStart then return nil end
+
+    -- Find |h[ to find end of link data and start of display text
+    local displayStart, displayStartEnd = string.find(link, "|h%[", hEnd)
+    if not displayStart then return nil end
+
+    -- Extract type:data between |H and |h[
+    local typeData = string.sub(link, hEnd + 1, displayStart - 1)
+
+    -- Split type:data by first colon
+    local colonPos = string.find(typeData, ":")
+    if colonPos then
+        linkType = string.sub(typeData, 1, colonPos - 1)
+        linkData = string.sub(typeData, colonPos + 1)
+    else
+        linkType = typeData
+        linkData = ""
+    end
+
+    -- Find ]|h to get display text
+    local displayEnd = string.find(link, "%]|h", displayStartEnd)
+    if not displayEnd then return nil end
+
+    displayText = string.sub(link, displayStartEnd + 1, displayEnd - 1)
+
+    return linkType, linkData, displayText, colorCode
 end
 
--- Display translated message
-local function DisplayTranslation(sender, translation, event)
-    if not WoWTranslateDB then return end
-    if not WoWTranslateDB.enabled then return end
-    if not WoWTranslateDB.showInChat then return end
-
-    local color = GetChatColor(event)
-    -- Format: [TT] PlayerName: translation
-    local message = color .. "[TT] " .. sender .. ": " .. translation .. "|r"
-    DEFAULT_CHAT_FRAME:AddMessage(message)
+-- Extract item ID from link data (format: itemId:enchantId:suffixId:uniqueId)
+local function GetItemIdFromLinkData(linkData)
+    local colonPos = string.find(linkData, ":")
+    if colonPos then
+        return tonumber(string.sub(linkData, 1, colonPos - 1))
+    else
+        return tonumber(linkData)
+    end
 end
 
--- ============================================================================
--- TRANSLATION LOGIC
--- ============================================================================
--- Main translation function
-local function TranslateMessage(message, sender, event)
-    if not WoWTranslateDB then return end
-    if not WoWTranslateDB.enabled then return end
+-- Localize a hyperlink by replacing the display text with the English name
+-- Currently supports: items (via GetItemInfo)
+-- Falls back to original if localization not available
+local function LocalizeHyperlink(link)
+    DebugLog("LocalizeHyperlink called:", string.sub(link, 1, 40))
 
-    DebugLog("Processing message from", sender, ":", message)
+    local linkType, linkData, displayText, colorCode = ParseHyperlink(link)
 
-    -- Step 1: Check WoW-specific glossary FIRST (100% accurate)
-    local glossaryResult, matchType = WoWTranslate_CheckGlossary(message)
-    if glossaryResult then
-        DebugLog("Glossary", matchType, ":", message, "->", glossaryResult)
-        DisplayTranslation(sender, glossaryResult, event)
-        return
+    if not linkType then
+        DebugLog("  Parse failed, returning original")
+        return link  -- Couldn't parse, return original
     end
 
-    -- Step 2: Check permanent cache
-    local cached, found = WoWTranslate_CacheGet(message)
-    if found then
-        DebugLog("Cache hit:", message, "->", cached)
-        DisplayTranslation(sender, cached, event)
-        return
-    end
+    DebugLog("  Parsed:", linkType, linkData and string.sub(linkData, 1, 20) or "nil")
 
-    -- Step 3: Call Google API via DLL (only for non-gaming conversational text)
-    if not WoWTranslate_API.IsAvailable() then
-        DebugLog("DLL not available, skipping API call")
-        return
-    end
+    local localizedName = nil
 
-    DebugLog("API request for:", message)
-    WoWTranslate_API.Translate(message, function(translation, err)
-        if translation then
-            DebugLog("API returned:", translation)
-            -- Save to permanent cache
-            WoWTranslate_CacheSave(message, translation)
-            DisplayTranslation(sender, translation, event)
-        else
-            DebugLog("API error:", err or "unknown")
+    if linkType == "item" then
+        local itemId = GetItemIdFromLinkData(linkData)
+        DebugLog("  Item ID:", itemId)
+        if itemId then
+            -- GetItemInfo returns: name, link, quality, iLevel, reqLevel, class, subclass, maxStack, equipSlot, texture, vendorPrice
+            localizedName = GetItemInfo(itemId)
+            DebugLog("  GetItemInfo returned:", localizedName or "nil")
         end
-    end)
+    else
+        DebugLog("  Not an item link, skipping")
+    end
+    -- Quest and spell localization not supported in vanilla WoW 1.12
+    -- (no GetQuestInfoByID or GetSpellInfo APIs)
+
+    if not localizedName then
+        DebugLog("  No localized name, returning original")
+        return link  -- No localized name found, return original
+    end
+
+    -- Rebuild the link with localized name
+    local result
+    if colorCode then
+        result = "|c" .. colorCode .. "|H" .. linkType .. ":" .. linkData .. "|h[" .. localizedName .. "]|h|r"
+    else
+        result = "|H" .. linkType .. ":" .. linkData .. "|h[" .. localizedName .. "]|h"
+    end
+    DebugLog("  Returning localized:", string.sub(result, 1, 50))
+    return result
 end
 
 -- ============================================================================
--- CHAT EVENT HANDLERS
+-- ROBUST HYPERLINK EXTRACTION
 -- ============================================================================
--- CRITICAL: Never modify arg2 (sender name) - it must remain untouched
--- for /whisper, /invite, and other player interactions to work
+-- WoW 1.12 hyperlink format: |cFFRRGGBB|Htype:data|h[DisplayText]|h|r
+-- Key: Extract FULL hyperlinks including color codes as single units
 
-local function OnChatMessage()
-    local message = arg1      -- Text to translate
-    local sender = arg2       -- PRESERVE EXACTLY - never translate/modify
-    local language = arg3
-    local channelName = arg4
-    local event = event       -- Chat event type
+-- Find all hyperlinks in text, returning their positions and content
+local function FindAllHyperlinks(text)
+    local hyperlinks = {}
+    local pos = 1
 
-    -- Only process if message contains Chinese characters
-    if not ContainsChinese(message) then
-        return
+    while pos <= string.len(text) do
+        -- Look for hyperlink start - either |c (colored) or |H (plain)
+        local colorStart = string.find(text, "|c%x%x%x%x%x%x%x%x|H", pos)
+        local plainStart = string.find(text, "|H", pos)
+
+        local linkStart = nil
+        local hasColor = false
+
+        -- Determine which comes first
+        if colorStart and (not plainStart or colorStart <= plainStart) then
+            linkStart = colorStart
+            hasColor = true
+        elseif plainStart then
+            -- Make sure this |H isn't part of a colored link we already found
+            if not colorStart or plainStart < colorStart then
+                linkStart = plainStart
+                hasColor = false
+            end
+        end
+
+        if not linkStart then
+            break
+        end
+
+        -- Find the end of the hyperlink: |h[...]|h followed by optional |r
+        -- Pattern: find |h[ then find ]|h
+        local displayStart = string.find(text, "|h%[", linkStart)
+        if not displayStart then
+            pos = linkStart + 1
+        else
+            -- Find closing ]|h
+            local displayEnd = string.find(text, "%]|h", displayStart)
+            if not displayEnd then
+                pos = linkStart + 1
+            else
+                local linkEnd = displayEnd + 2  -- Position after ]|h
+
+                -- Check for |r after the link
+                if string.sub(text, linkEnd + 1, linkEnd + 2) == "|r" then
+                    linkEnd = linkEnd + 2
+                end
+
+                -- If we have color, make sure we started from |c
+                local actualStart = linkStart
+                if hasColor then
+                    actualStart = colorStart
+                end
+
+                local fullLink = string.sub(text, actualStart, linkEnd)
+
+                table.insert(hyperlinks, {
+                    startPos = actualStart,
+                    endPos = linkEnd,
+                    content = fullLink
+                })
+
+                pos = linkEnd + 1
+            end
+        end
     end
 
-    DebugLog("Chinese detected in", event, "from", sender)
+    return hyperlinks
+end
 
-    -- Translate the message (sender is preserved, never translated)
-    TranslateMessage(message, sender, event)
+-- Split message into segments: text and hyperlinks
+-- Returns array of {type="text"|"link", content=string}
+local function SplitIntoSegments(text)
+    local segments = {}
+    local hyperlinks = FindAllHyperlinks(text)
+
+    if table.getn(hyperlinks) == 0 then
+        -- No hyperlinks, entire text is translatable
+        if text ~= "" then
+            table.insert(segments, {type = "text", content = text})
+        end
+        return segments
+    end
+
+    local lastEnd = 0
+    for _, link in ipairs(hyperlinks) do
+        -- Add text before this hyperlink
+        if link.startPos > lastEnd + 1 then
+            local textBefore = string.sub(text, lastEnd + 1, link.startPos - 1)
+            if textBefore ~= "" then
+                table.insert(segments, {type = "text", content = textBefore})
+            end
+        end
+
+        -- Add the hyperlink (with localized display name if available)
+        table.insert(segments, {type = "link", content = LocalizeHyperlink(link.content)})
+        lastEnd = link.endPos
+    end
+
+    -- Add text after last hyperlink
+    if lastEnd < string.len(text) then
+        local textAfter = string.sub(text, lastEnd + 1)
+        if textAfter ~= "" then
+            table.insert(segments, {type = "text", content = textAfter})
+        end
+    end
+
+    return segments
+end
+
+-- Check if any text segments contain Chinese
+local function HasTranslatableContent(segments)
+    for _, seg in ipairs(segments) do
+        if seg.type == "text" and ContainsChinese(seg.content) then
+            return true
+        end
+    end
+    return false
+end
+
+-- Build text to translate: only text segments, hyperlinks become URL placeholders
+-- URLs are preserved by Google Translate because they're recognized as web addresses
+local function BuildTranslatableText(segments)
+    local parts = {}
+    local linkIndex = 0
+
+    for _, seg in ipairs(segments) do
+        if seg.type == "text" then
+            table.insert(parts, seg.content)
+        else
+            linkIndex = linkIndex + 1
+            -- Use URL format - translation APIs preserve URLs
+            table.insert(parts, "http://ph.wt/" .. linkIndex)
+        end
+    end
+
+    return table.concat(parts, "")
+end
+
+-- Reconstruct message from translated text and original segments
+local function ReconstructMessage(segments, translatedText)
+    local result = {}
+    local workText = translatedText
+
+    -- Count links
+    local linkCount = 0
+    local linkContents = {}
+    for _, seg in ipairs(segments) do
+        if seg.type == "link" then
+            linkCount = linkCount + 1
+            linkContents[linkCount] = seg.content
+        end
+    end
+
+    if linkCount == 0 then
+        return translatedText
+    end
+
+    -- Replace each URL placeholder with the original hyperlink
+    for i = 1, linkCount do
+        local placeholder = "http://ph.wt/" .. i
+        -- Also try with https (in case API changes it)
+        local placeholder2 = "https://ph.wt/" .. i
+        -- Also try URL-encoded or modified versions
+        local placeholder3 = "http://ph .wt/" .. i
+        local placeholder4 = "http: //ph.wt/" .. i
+
+        local found = false
+
+        -- Try exact match first
+        local startPos, endPos = string.find(workText, placeholder, 1, true)
+        if startPos then
+            workText = string.sub(workText, 1, startPos - 1) .. linkContents[i] .. string.sub(workText, endPos + 1)
+            found = true
+            DebugLog("Replaced placeholder", i)
+        end
+
+        -- Try https version
+        if not found then
+            startPos, endPos = string.find(workText, placeholder2, 1, true)
+            if startPos then
+                workText = string.sub(workText, 1, startPos - 1) .. linkContents[i] .. string.sub(workText, endPos + 1)
+                found = true
+                DebugLog("Replaced https placeholder", i)
+            end
+        end
+
+        -- Try with space after http:
+        if not found then
+            startPos, endPos = string.find(workText, placeholder3, 1, true)
+            if startPos then
+                workText = string.sub(workText, 1, startPos - 1) .. linkContents[i] .. string.sub(workText, endPos + 1)
+                found = true
+            end
+        end
+
+        if not found then
+            startPos, endPos = string.find(workText, placeholder4, 1, true)
+            if startPos then
+                workText = string.sub(workText, 1, startPos - 1) .. linkContents[i] .. string.sub(workText, endPos + 1)
+                found = true
+            end
+        end
+
+        if not found then
+            DebugLog("Placeholder not found:", placeholder)
+            -- Append the link at the end as fallback
+            workText = workText .. " " .. linkContents[i]
+        end
+    end
+
+    return workText
+end
+
+-- ============================================================================
+-- CHAT FRAME HOOKING
+-- ============================================================================
+
+local function HookChatFrames()
+    if not originalAddMessage and DEFAULT_CHAT_FRAME and DEFAULT_CHAT_FRAME.AddMessage then
+        originalAddMessage = DEFAULT_CHAT_FRAME.AddMessage
+    end
+
+    for i = 1, NUM_CHAT_WINDOWS do
+        local frameName = "ChatFrame" .. i
+        local frame = getglobal(frameName)
+
+        if frame and frame.AddMessage and not frame.WoWTranslateHooked then
+            frame.WoWTranslateHooked = true
+            local frameOriginalAddMessage = frame.AddMessage
+
+            frame.AddMessage = function(self, text, r, g, b, id, holdTime)
+                if not WoWTranslateDB or not WoWTranslateDB.enabled then
+                    frameOriginalAddMessage(self, text, r, g, b, id, holdTime)
+                    return
+                end
+
+                if not text or not ContainsChinese(text) then
+                    frameOriginalAddMessage(self, text, r, g, b, id, holdTime)
+                    return
+                end
+
+                -- Split into segments (text and hyperlinks)
+                local segments = SplitIntoSegments(text)
+
+                DebugLog("Segments found:", table.getn(segments))
+                for idx, seg in ipairs(segments) do
+                    DebugLog("  Seg", idx, seg.type, ":", string.sub(seg.content, 1, 60))
+                end
+
+                -- Check if there's Chinese text to translate (outside hyperlinks)
+                if not HasTranslatableContent(segments) then
+                    -- All Chinese is inside hyperlinks - show original
+                    frameOriginalAddMessage(self, text, r, g, b, id, holdTime)
+                    return
+                end
+
+                -- Build text to send to translation API
+                local textToTranslate = BuildTranslatableText(segments)
+
+                DebugLog("To translate:", string.sub(textToTranslate, 1, 50))
+
+                -- Check cache first
+                local cached, found = WoWTranslate_CacheGet(text)
+                if found then
+                    DebugLog("Cache hit")
+                    frameOriginalAddMessage(self, cached, r, g, b, id, holdTime)
+                    return
+                end
+
+                -- Need API translation
+                if WoWTranslate_API and WoWTranslate_API.IsAvailable() then
+                    messageCounter = messageCounter + 1
+                    local msgId = tostring(messageCounter)
+
+                    pendingMessages[msgId] = {
+                        frame = self,
+                        originalAddMessage = frameOriginalAddMessage,
+                        originalText = text,
+                        segments = segments,
+                        r = r,
+                        g = g,
+                        b = b,
+                        id = id,
+                        holdTime = holdTime,
+                        timestamp = GetTime()
+                    }
+
+                    DebugLog("Queued for API:", msgId)
+
+                    WoWTranslate_API.Translate(textToTranslate, function(translation, err)
+                        local pending = pendingMessages[msgId]
+                        if pending then
+                            pendingMessages[msgId] = nil
+
+                            if translation then
+                                DebugLog("API returned:", string.sub(translation, 1, 50))
+
+                                -- Reconstruct with original hyperlinks
+                                local finalText = ReconstructMessage(pending.segments, translation)
+
+                                DebugLog("Final:", string.sub(finalText, 1, 50))
+
+                                WoWTranslate_CacheSave(pending.originalText, finalText)
+                                pending.originalAddMessage(pending.frame, finalText, pending.r, pending.g, pending.b, pending.id, pending.holdTime)
+                            else
+                                DebugLog("API error:", err)
+                                pending.originalAddMessage(pending.frame, pending.originalText, pending.r, pending.g, pending.b, pending.id, pending.holdTime)
+                            end
+                        end
+                    end)
+
+                    return
+                else
+                    DebugLog("DLL not available")
+                end
+
+                frameOriginalAddMessage(self, text, r, g, b, id, holdTime)
+            end
+
+            DebugLog("Hooked", frameName)
+        end
+    end
+end
+
+local function CleanupPendingMessages()
+    local now = GetTime()
+    for msgId, pending in pairs(pendingMessages) do
+        if now - pending.timestamp > 30 then
+            DebugLog("Message timed out:", msgId)
+            pending.originalAddMessage(pending.frame, pending.originalText, pending.r, pending.g, pending.b, pending.id, pending.holdTime)
+            pendingMessages[msgId] = nil
+        end
+    end
 end
 
 -- ============================================================================
@@ -200,7 +546,6 @@ SLASH_WOWTRANSLATE1 = "/wt"
 SLASH_WOWTRANSLATE2 = "/wowtranslate"
 
 SlashCmdList["WOWTRANSLATE"] = function(msg)
-    -- Ensure DB exists (safety check)
     if not WoWTranslateDB then
         WoWTranslateDB = {}
         InitializeSettings()
@@ -235,35 +580,32 @@ SlashCmdList["WOWTRANSLATE"] = function(msg)
         local glossaryCount = WoWTranslate_GetGlossaryCount()
         local pendingCount = WoWTranslate_API.GetPendingCount()
 
+        local queuedCount = 0
+        for _ in pairs(pendingMessages) do
+            queuedCount = queuedCount + 1
+        end
+
         DEFAULT_CHAT_FRAME:AddMessage("[WoWTranslate] Status:")
         DEFAULT_CHAT_FRAME:AddMessage("  DLL: " .. dllStatus)
         DEFAULT_CHAT_FRAME:AddMessage("  Enabled: " .. tostring(WoWTranslateDB.enabled))
         DEFAULT_CHAT_FRAME:AddMessage("  Glossary entries: " .. glossaryCount)
         DEFAULT_CHAT_FRAME:AddMessage("  Cached translations: " .. cacheStats.entries)
         DEFAULT_CHAT_FRAME:AddMessage("  Cache hit rate: " .. string.format("%.1f%%", cacheStats.hitRate))
-        DEFAULT_CHAT_FRAME:AddMessage("  Pending requests: " .. pendingCount)
+        DEFAULT_CHAT_FRAME:AddMessage("  Pending API requests: " .. pendingCount)
+        DEFAULT_CHAT_FRAME:AddMessage("  Queued messages: " .. queuedCount)
 
     elseif cmd == "test" then
-        local testText = arg or "你好"
+        local testText = arg or "\228\189\160\229\165\189"
         DEFAULT_CHAT_FRAME:AddMessage("[WoWTranslate] Testing: " .. testText)
 
-        -- First check glossary
-        local glossaryResult, matchType = WoWTranslate_CheckGlossary(testText)
-        if glossaryResult then
-            DEFAULT_CHAT_FRAME:AddMessage("[WoWTranslate] Glossary (" .. matchType .. "): " .. glossaryResult)
-            return
-        end
-
-        -- Then check cache
         local cached, found = WoWTranslate_CacheGet(testText)
         if found then
             DEFAULT_CHAT_FRAME:AddMessage("[WoWTranslate] Cache hit: " .. cached)
             return
         end
 
-        -- Finally try API
         if not WoWTranslate_API.IsAvailable() then
-            DEFAULT_CHAT_FRAME:AddMessage("|cFFFF0000[WoWTranslate] DLL not available for API test|r")
+            DEFAULT_CHAT_FRAME:AddMessage("|cFFFF0000[WoWTranslate] DLL not available|r")
             return
         end
 
@@ -280,86 +622,6 @@ SlashCmdList["WOWTRANSLATE"] = function(msg)
     elseif cmd == "clearcache" then
         WoWTranslate_CacheClear()
         DEFAULT_CHAT_FRAME:AddMessage("|cFFFFFF00[WoWTranslate] Cache cleared|r")
-
-    elseif cmd == "test1" then
-        -- Glossary test: "Hello" in Chinese
-        local testText = "\228\189\160\229\165\189"  -- 你好
-        DEFAULT_CHAT_FRAME:AddMessage("[WoWTranslate] Test 1 - Glossary test")
-        DEFAULT_CHAT_FRAME:AddMessage("[WoWTranslate] Input: ni hao (Hello)")
-        local result, matchType = WoWTranslate_CheckGlossary(testText)
-        if result then
-            DEFAULT_CHAT_FRAME:AddMessage("|cFF00FF00[WoWTranslate] Result: " .. result .. " (" .. matchType .. ")|r")
-        else
-            DEFAULT_CHAT_FRAME:AddMessage("|cFFFF0000[WoWTranslate] No glossary match|r")
-        end
-
-    elseif cmd == "test2" then
-        -- Glossary test: "LFG Molten Core" in Chinese
-        local testText = "\230\177\130\231\187\132MC"  -- 求组MC
-        DEFAULT_CHAT_FRAME:AddMessage("[WoWTranslate] Test 2 - Glossary test (WoW terms)")
-        DEFAULT_CHAT_FRAME:AddMessage("[WoWTranslate] Input: qiu zu MC (LFG MC)")
-        local result, matchType = WoWTranslate_CheckGlossary(testText)
-        if result then
-            DEFAULT_CHAT_FRAME:AddMessage("|cFF00FF00[WoWTranslate] Result: " .. result .. " (" .. matchType .. ")|r")
-        else
-            DEFAULT_CHAT_FRAME:AddMessage("|cFFFF0000[WoWTranslate] No glossary match|r")
-        end
-
-    elseif cmd == "test3" then
-        -- API test: "The weather is nice today"
-        local testText = "\228\187\138\229\164\169\229\164\169\230\176\148\229\190\136\229\165\189"  -- 今天天气很好
-        DEFAULT_CHAT_FRAME:AddMessage("[WoWTranslate] Test 3 - API test")
-        DEFAULT_CHAT_FRAME:AddMessage("[WoWTranslate] Input: jin tian tian qi hen hao (The weather is nice today)")
-
-        -- Check cache first
-        local cached, found = WoWTranslate_CacheGet(testText)
-        if found then
-            DEFAULT_CHAT_FRAME:AddMessage("|cFF00FF00[WoWTranslate] Cache hit: " .. cached .. "|r")
-            return
-        end
-
-        if not WoWTranslate_API.IsAvailable() then
-            DEFAULT_CHAT_FRAME:AddMessage("|cFFFF0000[WoWTranslate] DLL not available|r")
-            return
-        end
-
-        DEFAULT_CHAT_FRAME:AddMessage("[WoWTranslate] Calling API...")
-        WoWTranslate_API.Translate(testText, function(result, err)
-            if result then
-                DEFAULT_CHAT_FRAME:AddMessage("|cFF00FF00[WoWTranslate] API Result: " .. result .. "|r")
-                WoWTranslate_CacheSave(testText, result)
-            else
-                DEFAULT_CHAT_FRAME:AddMessage("|cFFFF0000[WoWTranslate] API Error: " .. (err or "unknown") .. "|r")
-            end
-        end)
-
-    elseif cmd == "test4" then
-        -- API test: "I need help"
-        local testText = "\230\136\145\233\156\128\232\166\129\229\184\174\229\138\169"  -- 我需要帮助
-        DEFAULT_CHAT_FRAME:AddMessage("[WoWTranslate] Test 4 - API test")
-        DEFAULT_CHAT_FRAME:AddMessage("[WoWTranslate] Input: wo xu yao bang zhu (I need help)")
-
-        -- Check cache first
-        local cached, found = WoWTranslate_CacheGet(testText)
-        if found then
-            DEFAULT_CHAT_FRAME:AddMessage("|cFF00FF00[WoWTranslate] Cache hit: " .. cached .. "|r")
-            return
-        end
-
-        if not WoWTranslate_API.IsAvailable() then
-            DEFAULT_CHAT_FRAME:AddMessage("|cFFFF0000[WoWTranslate] DLL not available|r")
-            return
-        end
-
-        DEFAULT_CHAT_FRAME:AddMessage("[WoWTranslate] Calling API...")
-        WoWTranslate_API.Translate(testText, function(result, err)
-            if result then
-                DEFAULT_CHAT_FRAME:AddMessage("|cFF00FF00[WoWTranslate] API Result: " .. result .. "|r")
-                WoWTranslate_CacheSave(testText, result)
-            else
-                DEFAULT_CHAT_FRAME:AddMessage("|cFFFF0000[WoWTranslate] API Error: " .. (err or "unknown") .. "|r")
-            end
-        end)
 
     elseif cmd == "debug" then
         DEBUG_MODE = not DEBUG_MODE
@@ -378,20 +640,46 @@ SlashCmdList["WOWTRANSLATE"] = function(msg)
         WoWTranslateDebugLog = {}
         DEFAULT_CHAT_FRAME:AddMessage("[WoWTranslate] Debug log cleared")
 
+    elseif cmd == "testlink" then
+        -- Test hyperlink parsing and localization
+        local testMsg = "|cffffffff|Hplayer:TestName|h[TestName]|h|r says hello"
+        DEFAULT_CHAT_FRAME:AddMessage("[WoWTranslate] Testing hyperlink parse:")
+        DEFAULT_CHAT_FRAME:AddMessage("  Input: " .. testMsg)
+        local segs = SplitIntoSegments(testMsg)
+        for idx, seg in ipairs(segs) do
+            DEFAULT_CHAT_FRAME:AddMessage("  Seg " .. idx .. " [" .. seg.type .. "]: " .. seg.content)
+        end
+
+    elseif cmd == "testitem" then
+        -- Test item localization with a known item
+        DEFAULT_CHAT_FRAME:AddMessage("[WoWTranslate] Testing item localization...")
+        local itemId = 2589  -- Default: Linen Cloth (common item)
+        if arg and arg ~= "" then
+            itemId = tonumber(arg) or 19716
+        end
+        DEFAULT_CHAT_FRAME:AddMessage("  Item ID: " .. tostring(itemId))
+        local itemName = GetItemInfo(itemId)
+        if itemName then
+            DEFAULT_CHAT_FRAME:AddMessage("  GetItemInfo returned: " .. itemName)
+            -- Create a fake Chinese link to test localization
+            local testLink = "|cffa335ee|Hitem:" .. itemId .. ":0:0:0|h[测试物品]|h|r"
+            DEFAULT_CHAT_FRAME:AddMessage("  Test link: " .. testLink)
+            local localized = LocalizeHyperlink(testLink)
+            DEFAULT_CHAT_FRAME:AddMessage("  Localized: " .. localized)
+        else
+            DEFAULT_CHAT_FRAME:AddMessage("  GetItemInfo returned nil - item not in client cache")
+            DEFAULT_CHAT_FRAME:AddMessage("  Try: /wt testitem with an item ID you've seen (hover over an item link first)")
+        end
+
     else
         DEFAULT_CHAT_FRAME:AddMessage("[WoWTranslate] Commands:")
-        DEFAULT_CHAT_FRAME:AddMessage("  /wt on|off - Enable/disable translation")
-        DEFAULT_CHAT_FRAME:AddMessage("  /wt key <apikey> - Set Google API key")
-        DEFAULT_CHAT_FRAME:AddMessage("  /wt status - Show status and statistics")
-        DEFAULT_CHAT_FRAME:AddMessage("  /wt test [text] - Test translation")
-        DEFAULT_CHAT_FRAME:AddMessage("  /wt test1 - Test glossary (Hello)")
-        DEFAULT_CHAT_FRAME:AddMessage("  /wt test2 - Test glossary (LFG MC)")
-        DEFAULT_CHAT_FRAME:AddMessage("  /wt test3 - Test API (weather)")
-        DEFAULT_CHAT_FRAME:AddMessage("  /wt test4 - Test API (need help)")
-        DEFAULT_CHAT_FRAME:AddMessage("  /wt clearcache - Clear translation cache")
+        DEFAULT_CHAT_FRAME:AddMessage("  /wt on|off - Enable/disable")
+        DEFAULT_CHAT_FRAME:AddMessage("  /wt key <apikey> - Set API key")
+        DEFAULT_CHAT_FRAME:AddMessage("  /wt status - Show status")
+        DEFAULT_CHAT_FRAME:AddMessage("  /wt clearcache - Clear cache")
         DEFAULT_CHAT_FRAME:AddMessage("  /wt debug - Toggle debug mode")
-        DEFAULT_CHAT_FRAME:AddMessage("  /wt log - Show recent debug log")
-        DEFAULT_CHAT_FRAME:AddMessage("  /wt clearlog - Clear debug log")
+        DEFAULT_CHAT_FRAME:AddMessage("  /wt testlink - Test hyperlink parsing")
+        DEFAULT_CHAT_FRAME:AddMessage("  /wt testitem [id] - Test item localization")
     end
 end
 
@@ -399,22 +687,15 @@ end
 -- ADDON INITIALIZATION
 -- ============================================================================
 local function InitializeSettings()
-    -- Ensure SavedVariables exist (WoW 1.12 may not have initialized them yet)
-    if not WoWTranslateDB then
-        WoWTranslateDB = {}
-    end
-    if not WoWTranslateDebugLog then
-        WoWTranslateDebugLog = {}
-    end
+    if not WoWTranslateDB then WoWTranslateDB = {} end
+    if not WoWTranslateDebugLog then WoWTranslateDebugLog = {} end
 
-    -- Apply defaults for any missing settings
     for key, value in pairs(defaults) do
         if WoWTranslateDB[key] == nil then
             WoWTranslateDB[key] = value
         end
     end
 
-    -- Restore debug mode from saved settings
     DEBUG_MODE = WoWTranslateDB.debugMode or false
 end
 
@@ -422,28 +703,37 @@ local function OnAddonLoaded()
     if addonLoaded then return end
     addonLoaded = true
 
-    -- Initialize settings
     InitializeSettings()
 
-    -- Check DLL availability
     local dllOk = WoWTranslate_API.CheckDLL()
 
-    -- Set API key if we have one saved
     if dllOk and WoWTranslateDB.apiKey and WoWTranslateDB.apiKey ~= "" then
         WoWTranslate_API.SetKey(WoWTranslateDB.apiKey)
     end
 
-    -- Start polling for translation responses
     if dllOk then
         WoWTranslate_API.StartPolling()
     end
 
-    -- Print startup message
     local glossaryCount = WoWTranslate_GetGlossaryCount()
     local cacheCount = WoWTranslate_CacheStats().entries
     local dllStatus = dllOk and "|cFF00FF00DLL OK|r" or "|cFFFFFF00DLL not loaded|r"
 
-    DEFAULT_CHAT_FRAME:AddMessage("|cFF00CCFFWoWTranslate|r v0.1 loaded - " .. dllStatus .. " | " .. glossaryCount .. " glossary terms | " .. cacheCount .. " cached translations | Type /wt for help")
+    DEFAULT_CHAT_FRAME:AddMessage("|cFF00CCFFWoWTranslate|r v0.7 - " .. dllStatus .. " | /wt help")
+end
+
+local function OnPlayerLogin()
+    HookChatFrames()
+
+    if not WoWTranslate_API.IsAvailable() then
+        WoWTranslate_API.CheckDLL()
+        if WoWTranslate_API.IsAvailable() then
+            WoWTranslate_API.StartPolling()
+            if WoWTranslateDB and WoWTranslateDB.apiKey and WoWTranslateDB.apiKey ~= "" then
+                WoWTranslate_API.SetKey(WoWTranslateDB.apiKey)
+            end
+        end
+    end
 end
 
 -- ============================================================================
@@ -453,32 +743,20 @@ local eventFrame = CreateFrame("Frame")
 eventFrame:RegisterEvent("ADDON_LOADED")
 eventFrame:RegisterEvent("PLAYER_LOGIN")
 
--- Register all chat events
-eventFrame:RegisterEvent("CHAT_MSG_SAY")
-eventFrame:RegisterEvent("CHAT_MSG_YELL")
-eventFrame:RegisterEvent("CHAT_MSG_WHISPER")
-eventFrame:RegisterEvent("CHAT_MSG_PARTY")
-eventFrame:RegisterEvent("CHAT_MSG_RAID")
-eventFrame:RegisterEvent("CHAT_MSG_RAID_LEADER")
-eventFrame:RegisterEvent("CHAT_MSG_GUILD")
-eventFrame:RegisterEvent("CHAT_MSG_OFFICER")
-eventFrame:RegisterEvent("CHAT_MSG_CHANNEL")
-
 eventFrame:SetScript("OnEvent", function()
     if event == "ADDON_LOADED" and arg1 == "WoWTranslate" then
         OnAddonLoaded()
     elseif event == "PLAYER_LOGIN" then
-        -- Re-check DLL after login (in case it loaded late)
-        if not WoWTranslate_API.IsAvailable() then
-            WoWTranslate_API.CheckDLL()
-            if WoWTranslate_API.IsAvailable() then
-                WoWTranslate_API.StartPolling()
-                if WoWTranslateDB and WoWTranslateDB.apiKey and WoWTranslateDB.apiKey ~= "" then
-                    WoWTranslate_API.SetKey(WoWTranslateDB.apiKey)
-                end
-            end
-        end
-    elseif string.find(event, "CHAT_MSG_") then
-        OnChatMessage()
+        OnPlayerLogin()
+    end
+end)
+
+local cleanupFrame = CreateFrame("Frame")
+local cleanupElapsed = 0
+cleanupFrame:SetScript("OnUpdate", function()
+    cleanupElapsed = cleanupElapsed + arg1
+    if cleanupElapsed >= 5 then
+        cleanupElapsed = 0
+        CleanupPendingMessages()
     end
 end)
