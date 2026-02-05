@@ -113,6 +113,72 @@ end
 -- Parse hyperlinks and replace Chinese display names with English equivalents
 -- using the client's GetItemInfo() API
 
+-- Queue for messages waiting on item cache
+local itemCacheQueue = {}
+local itemCacheCounter = 0
+
+-- Hidden tooltip for forcing item cache population
+local itemCacheTooltip = CreateFrame("GameTooltip", "WoWTranslateItemCacheTooltip", nil, "GameTooltipTemplate")
+itemCacheTooltip:SetOwner(WorldFrame, "ANCHOR_NONE")
+
+-- Force item data to be requested from server using SetHyperlink
+-- This is more reliable than just calling GetItemInfo()
+local function TriggerItemCache(itemId)
+    local itemString = "item:" .. itemId .. ":0:0:0"
+    itemCacheTooltip:SetHyperlink(itemString)
+    DebugLog("Triggered cache for item:", itemId)
+end
+
+-- Extract all item IDs from a text string
+local function ExtractItemIds(text)
+    local itemIds = {}
+    local pos = 1
+
+    while pos <= string.len(text) do
+        -- Look for item links: |Hitem:ITEMID:
+        local linkStart = string.find(text, "|Hitem:", pos, true)
+        if not linkStart then
+            break
+        end
+
+        -- Find the item ID (numbers after "item:")
+        local idStart = linkStart + 7  -- length of "|Hitem:"
+        local idEnd = string.find(text, ":", idStart, true)
+        if idEnd then
+            local itemIdStr = string.sub(text, idStart, idEnd - 1)
+            local itemId = tonumber(itemIdStr)
+            DebugLog("Extracted item ID:", itemIdStr, "->", itemId or "INVALID")
+            if itemId then
+                table.insert(itemIds, itemId)
+            end
+        end
+
+        pos = linkStart + 1
+    end
+
+    DebugLog("Total item IDs extracted:", table.getn(itemIds))
+    return itemIds
+end
+
+-- Check if all item IDs are cached, trigger cache for uncached ones
+-- Returns: allCached (boolean), uncachedIds (table)
+local function CheckItemCache(itemIds, triggerCache)
+    local uncachedIds = {}
+
+    for _, itemId in ipairs(itemIds) do
+        local name, link = GetItemInfo(itemId)
+        if not name then
+            table.insert(uncachedIds, itemId)
+            -- Use SetHyperlink to force server to send item data
+            if triggerCache then
+                TriggerItemCache(itemId)
+            end
+        end
+    end
+
+    return table.getn(uncachedIds) == 0, uncachedIds
+end
+
 -- Parse a hyperlink to extract its components
 -- Returns: linkType, linkData, displayText, colorCode (or nils if parse fails)
 local function ParseHyperlink(link)
@@ -167,6 +233,45 @@ local function GetItemIdFromLinkData(linkData)
     end
 end
 
+-- Extract quest ID from link data (format: questId:questLevel)
+local function GetQuestIdFromLinkData(linkData)
+    local colonPos = string.find(linkData, ":")
+    if colonPos then
+        return tonumber(string.sub(linkData, 1, colonPos - 1))
+    else
+        return tonumber(linkData)
+    end
+end
+
+-- Get English quest name from pfQuest database
+-- Returns nil if pfQuest not loaded or quest not found
+local function GetEnglishQuestName(questId)
+    if not pfDB or not pfDB["quests"] then
+        return nil  -- pfQuest not loaded
+    end
+
+    -- Try Turtle WoW custom quests first (more specific)
+    local turtleQuests = pfDB["quests"]["enUS-turtle"]
+    if turtleQuests and turtleQuests[questId] then
+        local entry = turtleQuests[questId]
+        if type(entry) == "table" and entry["T"] then
+            return entry["T"]
+        end
+        -- "_" means deleted, fall through to vanilla
+    end
+
+    -- Try vanilla quests
+    local vanillaQuests = pfDB["quests"]["enUS"]
+    if vanillaQuests and vanillaQuests[questId] then
+        local entry = vanillaQuests[questId]
+        if type(entry) == "table" and entry["T"] then
+            return entry["T"]
+        end
+    end
+
+    return nil  -- Quest not in database
+end
+
 -- Localize a hyperlink by replacing the display text with the English name
 -- Currently supports: items (via GetItemInfo)
 -- Falls back to original if localization not available
@@ -182,36 +287,53 @@ local function LocalizeHyperlink(link)
 
     DebugLog("  Parsed:", linkType, linkData and string.sub(linkData, 1, 20) or "nil")
 
-    local localizedName = nil
-
     if linkType == "item" then
         local itemId = GetItemIdFromLinkData(linkData)
         DebugLog("  Item ID:", itemId)
         if itemId then
-            -- GetItemInfo returns: name, link, quality, iLevel, reqLevel, class, subclass, maxStack, equipSlot, texture, vendorPrice
-            localizedName = GetItemInfo(itemId)
-            DebugLog("  GetItemInfo returned:", localizedName or "nil")
+            -- GetItemInfo returns: name, link, quality, iLevel, ...
+            local itemName, itemLink = GetItemInfo(itemId)
+            DebugLog("  GetItemInfo returned:", itemName or "nil")
+
+            if itemName then
+                -- Always rebuild the link manually to ensure correct structure
+                -- Use original color code from the Chinese link, just replace the name
+                local result
+                if colorCode then
+                    result = "|c" .. colorCode .. "|H" .. linkType .. ":" .. linkData .. "|h[" .. itemName .. "]|h|r"
+                else
+                    result = "|H" .. linkType .. ":" .. linkData .. "|h[" .. itemName .. "]|h"
+                end
+                DebugLog("  Rebuilt link with English name")
+                return result
+            end
+        end
+    elseif linkType == "quest" then
+        local questId = GetQuestIdFromLinkData(linkData)
+        DebugLog("  Quest ID:", questId)
+        if questId then
+            local questName = GetEnglishQuestName(questId)
+            DebugLog("  GetEnglishQuestName returned:", questName or "nil")
+
+            if questName then
+                local result
+                if colorCode then
+                    result = "|c" .. colorCode .. "|H" .. linkType .. ":" .. linkData .. "|h[" .. questName .. "]|h|r"
+                else
+                    result = "|H" .. linkType .. ":" .. linkData .. "|h[" .. questName .. "]|h"
+                end
+                DebugLog("  Rebuilt quest link with English name")
+                return result
+            end
         end
     else
-        DebugLog("  Not an item link, skipping")
+        DebugLog("  Not an item or quest link, skipping localization")
     end
-    -- Quest and spell localization not supported in vanilla WoW 1.12
-    -- (no GetQuestInfoByID or GetSpellInfo APIs)
+    -- Quest localization uses pfQuest database (if available)
+    -- Spell localization not supported in vanilla WoW 1.12 (no GetSpellInfo API)
 
-    if not localizedName then
-        DebugLog("  No localized name, returning original")
-        return link  -- No localized name found, return original
-    end
-
-    -- Rebuild the link with localized name
-    local result
-    if colorCode then
-        result = "|c" .. colorCode .. "|H" .. linkType .. ":" .. linkData .. "|h[" .. localizedName .. "]|h|r"
-    else
-        result = "|H" .. linkType .. ":" .. linkData .. "|h[" .. localizedName .. "]|h"
-    end
-    DebugLog("  Returning localized:", string.sub(result, 1, 50))
-    return result
+    DebugLog("  No localized name, returning original")
+    return link  -- No localized name found, return original
 end
 
 -- ============================================================================
@@ -274,6 +396,8 @@ local function FindAllHyperlinks(text)
                 end
 
                 local fullLink = string.sub(text, actualStart, linkEnd)
+
+                DebugLog("Found hyperlink:", string.sub(fullLink, 1, 80))
 
                 table.insert(hyperlinks, {
                     startPos = actualStart,
@@ -388,6 +512,8 @@ local function ReconstructMessage(segments, translatedText)
 
         local found = false
 
+        DebugLog("Link", i, "content:", string.sub(linkContents[i] or "nil", 1, 80))
+
         -- Try exact match first
         local startPos, endPos = string.find(workText, placeholder, 1, true)
         if startPos then
@@ -461,6 +587,39 @@ local function HookChatFrames()
                     return
                 end
 
+                -- Log original message for debugging
+                DebugLog("ORIGINAL MSG:", string.sub(text, 1, 150))
+
+                -- Check for item links and ensure items are cached before processing
+                local itemIds = ExtractItemIds(text)
+                if table.getn(itemIds) > 0 then
+                    -- Pass true to trigger cache via SetHyperlink for uncached items
+                    local allCached, uncachedIds = CheckItemCache(itemIds, true)
+
+                    if not allCached then
+                        -- Queue message and wait for item cache
+                        itemCacheCounter = itemCacheCounter + 1
+                        local cacheId = tostring(itemCacheCounter)
+
+                        DebugLog("Waiting for item cache:", table.getn(uncachedIds), "items")
+
+                        itemCacheQueue[cacheId] = {
+                            frame = self,
+                            originalAddMessage = frameOriginalAddMessage,
+                            text = text,
+                            itemIds = itemIds,
+                            r = r,
+                            g = g,
+                            b = b,
+                            id = id,
+                            holdTime = holdTime,
+                            timestamp = GetTime(),
+                            retries = 0
+                        }
+                        return  -- Don't display yet, will be handled by cache poller
+                    end
+                end
+
                 -- Split into segments (text and hyperlinks)
                 local segments = SplitIntoSegments(text)
 
@@ -520,7 +679,14 @@ local function HookChatFrames()
                                 -- Reconstruct with original hyperlinks
                                 local finalText = ReconstructMessage(pending.segments, translation)
 
-                                DebugLog("Final:", string.sub(finalText, 1, 50))
+                                DebugLog("Final:", string.sub(finalText, 1, 100))
+
+                                -- Debug: Check if links still have proper structure
+                                if string.find(finalText, "|H") and string.find(finalText, "|h") then
+                                    DebugLog("Final has |H and |h markers - link structure OK")
+                                else
+                                    DebugLog("WARNING: Final missing link markers!")
+                                end
 
                                 WoWTranslate_CacheSave(pending.originalText, finalText)
                                 pending.originalAddMessage(pending.frame, finalText, pending.r, pending.g, pending.b, pending.id, pending.holdTime)
@@ -843,6 +1009,35 @@ SlashCmdList["WOWTRANSLATE"] = function(msg)
             DEFAULT_CHAT_FRAME:AddMessage("  Try: /wt testitem with an item ID you've seen (hover over an item link first)")
         end
 
+    elseif cmd == "testquest" then
+        -- Test quest localization using pfQuest database
+        DEFAULT_CHAT_FRAME:AddMessage("[WoWTranslate] Testing quest localization...")
+        local questId = 913  -- Default: Stranglethorn Fever (common quest)
+        if arg and arg ~= "" then
+            questId = tonumber(arg) or 913
+        end
+        DEFAULT_CHAT_FRAME:AddMessage("  Quest ID: " .. tostring(questId))
+
+        -- Check if pfQuest database is available
+        if not pfDB or not pfDB["quests"] then
+            DEFAULT_CHAT_FRAME:AddMessage("|cFFFF0000  pfQuest database not found!|r")
+            DEFAULT_CHAT_FRAME:AddMessage("  Quest localization requires pfQuest addon to be installed")
+            return
+        end
+
+        local questName = GetEnglishQuestName(questId)
+        if questName then
+            DEFAULT_CHAT_FRAME:AddMessage("  GetEnglishQuestName returned: " .. questName)
+            -- Create a fake Chinese link to test localization
+            local testLink = "|cffffff00|Hquest:" .. questId .. ":60|h[测试任务]|h|r"
+            DEFAULT_CHAT_FRAME:AddMessage("  Test link: " .. testLink)
+            local localized = LocalizeHyperlink(testLink)
+            DEFAULT_CHAT_FRAME:AddMessage("  Localized: " .. localized)
+        else
+            DEFAULT_CHAT_FRAME:AddMessage("|cFFFF0000  Quest not found in pfQuest database|r")
+            DEFAULT_CHAT_FRAME:AddMessage("  Try: /wt testquest <questId> with a known quest ID")
+        end
+
     -- =====================================================================
     -- OUTGOING TRANSLATION COMMANDS
     -- =====================================================================
@@ -965,7 +1160,7 @@ local function OnAddonLoaded()
     local cacheCount = WoWTranslate_CacheStats().entries
     local dllStatus = dllOk and "|cFF00FF00DLL OK|r" or "|cFFFFFF00DLL not loaded|r"
 
-    DEFAULT_CHAT_FRAME:AddMessage("|cFF00CCFFWoWTranslate|r v0.7 - " .. dllStatus .. " | /wt help")
+    DEFAULT_CHAT_FRAME:AddMessage("|cFF00CCFFWoWTranslate|r v0.8 - " .. dllStatus .. " | /wt help")
 end
 
 local function OnPlayerLogin()
@@ -1010,5 +1205,132 @@ cleanupFrame:SetScript("OnUpdate", function()
         cleanupElapsed = 0
         CleanupPendingMessages()
         CleanupOutgoingQueue()
+    end
+end)
+
+-- ============================================================================
+-- ITEM CACHE POLLING
+-- ============================================================================
+-- Process messages waiting for item cache data
+
+local function ProcessItemCacheMessage(queued)
+    local text = queued.text
+
+    -- Split into segments (text and hyperlinks) - items should be cached now
+    local segments = SplitIntoSegments(text)
+
+    DebugLog("Processing cached item message, segments:", table.getn(segments))
+
+    -- Check if there's Chinese text to translate (outside hyperlinks)
+    if not HasTranslatableContent(segments) then
+        -- All Chinese is inside hyperlinks - show with localized links
+        local result = ""
+        for _, seg in ipairs(segments) do
+            result = result .. seg.content
+        end
+        queued.originalAddMessage(queued.frame, result, queued.r, queued.g, queued.b, queued.id, queued.holdTime)
+        return
+    end
+
+    -- Build text to send to translation API
+    local textToTranslate = BuildTranslatableText(segments)
+
+    -- Check cache first
+    local cached, found = WoWTranslate_CacheGet(text)
+    if found then
+        DebugLog("Cache hit for item message")
+        queued.originalAddMessage(queued.frame, cached, queued.r, queued.g, queued.b, queued.id, queued.holdTime)
+        return
+    end
+
+    -- Need API translation
+    if WoWTranslate_API and WoWTranslate_API.IsAvailable() then
+        messageCounter = messageCounter + 1
+        local msgId = tostring(messageCounter)
+
+        pendingMessages[msgId] = {
+            frame = queued.frame,
+            originalAddMessage = queued.originalAddMessage,
+            originalText = text,
+            segments = segments,
+            r = queued.r,
+            g = queued.g,
+            b = queued.b,
+            id = queued.id,
+            holdTime = queued.holdTime,
+            timestamp = GetTime()
+        }
+
+        DebugLog("Queued item message for API:", msgId)
+
+        WoWTranslate_API.Translate(textToTranslate, function(translation, err)
+            local pending = pendingMessages[msgId]
+            if pending then
+                pendingMessages[msgId] = nil
+
+                if translation then
+                    DebugLog("API returned for item msg:", string.sub(translation, 1, 50))
+                    local finalText = ReconstructMessage(pending.segments, translation)
+                    WoWTranslate_CacheSave(pending.originalText, finalText)
+                    pending.originalAddMessage(pending.frame, finalText, pending.r, pending.g, pending.b, pending.id, pending.holdTime)
+                else
+                    DebugLog("API error for item msg:", err)
+                    pending.originalAddMessage(pending.frame, pending.originalText, pending.r, pending.g, pending.b, pending.id, pending.holdTime)
+                end
+            end
+        end)
+    else
+        -- No API, just show with localized links
+        local result = ""
+        for _, seg in ipairs(segments) do
+            result = result .. seg.content
+        end
+        queued.originalAddMessage(queued.frame, result, queued.r, queued.g, queued.b, queued.id, queued.holdTime)
+    end
+end
+
+local itemCacheFrame = CreateFrame("Frame")
+local itemCacheElapsed = 0
+local ITEM_CACHE_POLL_INTERVAL = 0.05  -- Poll every 50ms
+local ITEM_CACHE_MAX_WAIT = 3.0        -- Max wait 3 seconds
+local ITEM_CACHE_RETRY_INTERVAL = 0.5  -- Retry triggering cache every 500ms
+
+itemCacheFrame:SetScript("OnUpdate", function()
+    itemCacheElapsed = itemCacheElapsed + arg1
+    if itemCacheElapsed < ITEM_CACHE_POLL_INTERVAL then
+        return
+    end
+    itemCacheElapsed = 0
+
+    for cacheId, queued in pairs(itemCacheQueue) do
+        local allCached = CheckItemCache(queued.itemIds, false)  -- Just check, don't trigger
+        local elapsed = GetTime() - queued.timestamp
+
+        if allCached then
+            DebugLog("Items cached, processing message:", cacheId)
+            itemCacheQueue[cacheId] = nil
+            ProcessItemCacheMessage(queued)
+        elseif elapsed > ITEM_CACHE_MAX_WAIT then
+            -- Timeout - process anyway with whatever we have
+            local _, stillUncached = CheckItemCache(queued.itemIds, false)
+            DebugLog("Item cache timeout after", elapsed, "sec, uncached:", table.getn(stillUncached))
+            for _, uid in ipairs(stillUncached) do
+                DebugLog("  Still uncached item ID:", uid)
+            end
+            itemCacheQueue[cacheId] = nil
+            ProcessItemCacheMessage(queued)
+        else
+            -- Retry triggering cache periodically for stubborn items
+            if not queued.lastRetry or (GetTime() - queued.lastRetry) > ITEM_CACHE_RETRY_INTERVAL then
+                queued.lastRetry = GetTime()
+                queued.retries = (queued.retries or 0) + 1
+                if queued.retries <= 5 then  -- Max 5 retries
+                    local _, stillUncached = CheckItemCache(queued.itemIds, true)  -- Trigger cache again
+                    if table.getn(stillUncached) > 0 then
+                        DebugLog("Retry", queued.retries, "- triggering cache for", table.getn(stillUncached), "items")
+                    end
+                end
+            end
+        end
     end
 end)
