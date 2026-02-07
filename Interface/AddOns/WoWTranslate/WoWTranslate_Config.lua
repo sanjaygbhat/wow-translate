@@ -1,5 +1,6 @@
 -- WoWTranslate_Config.lua
 -- Configuration UI panel for WoWTranslate
+-- v0.10: Updated for WoWTranslate API keys with credit display
 
 -- ============================================================================
 -- LANGUAGES
@@ -86,12 +87,12 @@ local function MaskApiKey(key)
 end
 
 -- ============================================================================
--- CREATE MAIN FRAME (bigger size)
+-- CREATE MAIN FRAME (bigger size to accommodate credits)
 -- ============================================================================
 local configFrame = CreateFrame("Frame", "WoWTranslateConfigFrame", UIParent)
 configFrame:Hide()
 configFrame:SetWidth(420)
-configFrame:SetHeight(580)
+configFrame:SetHeight(620)  -- Increased for credits display
 configFrame:SetPoint("CENTER", 0, 0)
 configFrame:SetMovable(true)
 configFrame:EnableMouse(true)
@@ -151,28 +152,66 @@ end
 -- HELPER: Create Checkbox at specific position
 -- ============================================================================
 local function CreateCheckbox(label, xPos, yPos, configKey, subKey)
-    local cb = CreateFrame("CheckButton", nil, configFrame, "UICheckButtonTemplate")
-    cb:SetPoint("TOPLEFT", configFrame, "TOPLEFT", xPos, yPos)
+    -- Create a wrapper frame like the language selector does
+    local wrapper = CreateFrame("Frame", nil, configFrame)
+    wrapper:SetPoint("TOPLEFT", configFrame, "TOPLEFT", xPos, yPos)
+    wrapper:SetWidth(200)
+    wrapper:SetHeight(24)
 
-    local text = configFrame:CreateFontString(nil, "ARTWORK", "GameFontNormal")
+    -- Store config on wrapper (same pattern as language selector)
+    wrapper.configKey = configKey
+    wrapper.subKey = subKey
+
+    local cb = CreateFrame("CheckButton", nil, wrapper, "UICheckButtonTemplate")
+    cb:SetPoint("TOPLEFT", 0, 0)
+
+    local text = wrapper:CreateFontString(nil, "ARTWORK", "GameFontNormal")
     text:SetPoint("LEFT", cb, "RIGHT", 4, 0)
     text:SetText(label)
 
-    cb.configKey = configKey
-    cb.subKey = subKey
-
     cb:SetScript("OnClick", function()
-        local checked = this:GetChecked()
-        if this.subKey then
-            if not WoWTranslate_TempConfig[this.configKey] then
-                WoWTranslate_TempConfig[this.configKey] = {}
+        -- Use GetParent() like language selector does
+        local parent = this:GetParent()
+        local key = parent.configKey
+        local sub = parent.subKey
+
+        -- GetChecked() returns 1 or nil in WoW 1.12
+        local isChecked = this:GetChecked()
+        local enabled = (isChecked and true) or false
+
+        -- Use the global toggle functions for immediate effect
+        if key == "outgoingEnabled" then
+            WoWTranslate_SetOutgoingEnabled(enabled)
+            WoWTranslate_TempConfig.outgoingEnabled = enabled
+        elseif key == "enabled" then
+            WoWTranslate_SetIncomingEnabled(enabled)
+            WoWTranslate_TempConfig.enabled = enabled
+        elseif key == "outgoingChannels" and sub then
+            WoWTranslate_SetChannelEnabled(sub, enabled)
+            if not WoWTranslate_TempConfig.outgoingChannels then
+                WoWTranslate_TempConfig.outgoingChannels = {}
             end
-            WoWTranslate_TempConfig[this.configKey][this.subKey] = checked
+            WoWTranslate_TempConfig.outgoingChannels[sub] = enabled
         else
-            WoWTranslate_TempConfig[this.configKey] = checked
+            -- Fallback for any other settings
+            if sub then
+                if not WoWTranslate_TempConfig[key] then
+                    WoWTranslate_TempConfig[key] = {}
+                end
+                WoWTranslate_TempConfig[key][sub] = enabled
+                if not WoWTranslateDB[key] then
+                    WoWTranslateDB[key] = {}
+                end
+                WoWTranslateDB[key][sub] = enabled
+            else
+                WoWTranslate_TempConfig[key] = enabled
+                WoWTranslateDB[key] = enabled
+            end
         end
     end)
 
+    -- Return the checkbox (not wrapper) so SetChecked works
+    cb.wrapper = wrapper
     return cb
 end
 
@@ -236,7 +275,7 @@ local function CreateLangSelector(label, xPos, yPos, configKey)
 end
 
 -- ============================================================================
--- BUILD UI (with better spacing)
+-- BUILD UI (with better spacing, including credits)
 -- ============================================================================
 
 -- Y positions with better spacing
@@ -244,28 +283,31 @@ local Y_API_HEADER = -50
 local Y_API_LABEL = -78
 local Y_API_EDIT = -100
 
-local Y_IN_HEADER = -145
-local Y_IN_ENABLE = -175
-local Y_IN_LANG = -210
+-- Credits display (NEW in v0.10)
+local Y_CREDITS = -135
 
-local Y_OUT_HEADER = -280
-local Y_OUT_ENABLE = -310
-local Y_OUT_LANG = -345
+local Y_IN_HEADER = -175
+local Y_IN_ENABLE = -205
+local Y_IN_LANG = -240
 
-local Y_CH_LABEL = -415
-local Y_CH_ROW1 = -440
-local Y_CH_ROW2 = -470
+local Y_OUT_HEADER = -310
+local Y_OUT_ENABLE = -340
+local Y_OUT_LANG = -375
+
+local Y_CH_LABEL = -445
+local Y_CH_ROW1 = -470
+local Y_CH_ROW2 = -500
 
 -- API Settings Section
 CreateHeader("API Settings", Y_API_HEADER)
 
 local apiLabel = configFrame:CreateFontString(nil, "ARTWORK", "GameFontNormal")
 apiLabel:SetPoint("TOPLEFT", configFrame, "TOPLEFT", 25, Y_API_LABEL)
-apiLabel:SetText("API Key:")
+apiLabel:SetText("WoWTranslate API Key:")  -- Updated label
 
 local apiDisplay = configFrame:CreateFontString(nil, "ARTWORK", "GameFontHighlight")
 apiDisplay:SetPoint("LEFT", apiLabel, "RIGHT", 10, 0)
-apiDisplay:SetWidth(220)
+apiDisplay:SetWidth(200)
 apiDisplay:SetJustifyH("LEFT")
 configFrame.elements.apiDisplay = apiDisplay
 
@@ -313,6 +355,38 @@ applyApiBtn:SetScript("OnClick", function()
         configFrame.elements.apiEdit:ClearFocus()
     end
 end)
+
+-- Credits Display (NEW in v0.10)
+local creditsLabel = configFrame:CreateFontString(nil, "ARTWORK", "GameFontNormal")
+creditsLabel:SetPoint("TOPLEFT", configFrame, "TOPLEFT", 25, Y_CREDITS)
+creditsLabel:SetText("Credits Remaining:")
+
+local creditsDisplay = configFrame:CreateFontString(nil, "ARTWORK", "GameFontHighlight")
+creditsDisplay:SetPoint("LEFT", creditsLabel, "RIGHT", 10, 0)
+creditsDisplay:SetWidth(100)
+creditsDisplay:SetJustifyH("LEFT")
+creditsDisplay:SetText("Unknown")
+configFrame.elements.creditsDisplay = creditsDisplay
+
+-- Credits warning indicator
+local creditsWarning = configFrame:CreateFontString(nil, "ARTWORK", "GameFontNormal")
+creditsWarning:SetPoint("LEFT", creditsDisplay, "RIGHT", 10, 0)
+creditsWarning:SetTextColor(1, 0.5, 0)  -- Orange
+creditsWarning:SetText("")
+configFrame.elements.creditsWarning = creditsWarning
+
+-- Cache Savings Display (session-based)
+local savingsLabel = configFrame:CreateFontString(nil, "ARTWORK", "GameFontNormal")
+savingsLabel:SetPoint("TOPLEFT", configFrame, "TOPLEFT", 25, Y_CREDITS - 18)
+savingsLabel:SetText("Session Savings:")
+
+local savingsDisplay = configFrame:CreateFontString(nil, "ARTWORK", "GameFontHighlight")
+savingsDisplay:SetPoint("LEFT", savingsLabel, "RIGHT", 10, 0)
+savingsDisplay:SetWidth(250)
+savingsDisplay:SetJustifyH("LEFT")
+savingsDisplay:SetTextColor(0.2, 0.8, 0.2)  -- Green
+savingsDisplay:SetText("No cache hits yet")
+configFrame.elements.savingsDisplay = savingsDisplay
 
 -- Incoming Translation Section
 CreateHeader("Incoming Translation (Chat -> You)", Y_IN_HEADER)
@@ -379,6 +453,32 @@ local function RefreshUI()
         e.apiEdit:SetText("")
     end
 
+    -- Update credits display
+    if e.creditsDisplay then
+        if WoWTranslate_API and WoWTranslate_API.GetCreditsFormatted then
+            e.creditsDisplay:SetText(WoWTranslate_API.GetCreditsFormatted())
+
+            -- Show warning if credits are low
+            if WoWTranslate_API.IsCreditsLow and WoWTranslate_API.IsCreditsLow() then
+                e.creditsWarning:SetText("(Low - add credits soon!)")
+            else
+                e.creditsWarning:SetText("")
+            end
+        else
+            e.creditsDisplay:SetText("Unknown")
+            e.creditsWarning:SetText("")
+        end
+    end
+
+    -- Update cache savings display
+    if e.savingsDisplay then
+        if WoWTranslate_API and WoWTranslate_API.GetCacheSavingsFormatted then
+            e.savingsDisplay:SetText(WoWTranslate_API.GetCacheSavingsFormatted())
+        else
+            e.savingsDisplay:SetText("No cache hits yet")
+        end
+    end
+
     if e.inEnabled then e.inEnabled:SetChecked(cfg.enabled) end
     if e.outEnabled then e.outEnabled:SetChecked(cfg.outgoingEnabled) end
 
@@ -403,6 +503,41 @@ local function RefreshUI()
     if e.chRaid then e.chRaid:SetChecked(ch.RAID) end
     if e.chYell then e.chYell:SetChecked(ch.YELL) end
 end
+
+-- ============================================================================
+-- CREDITS UPDATE TIMER
+-- ============================================================================
+-- Update credits display periodically when config is open
+local creditsUpdateFrame = CreateFrame("Frame")
+local creditsUpdateElapsed = 0
+
+creditsUpdateFrame:SetScript("OnUpdate", function()
+    if not configFrame:IsVisible() then return end
+
+    creditsUpdateElapsed = creditsUpdateElapsed + arg1
+    if creditsUpdateElapsed >= 2 then  -- Update every 2 seconds
+        creditsUpdateElapsed = 0
+
+        local e = configFrame.elements
+        if WoWTranslate_API then
+            -- Update credits
+            if e.creditsDisplay and WoWTranslate_API.GetCreditsFormatted then
+                e.creditsDisplay:SetText(WoWTranslate_API.GetCreditsFormatted())
+            end
+            if e.creditsWarning then
+                if WoWTranslate_API.IsCreditsLow and WoWTranslate_API.IsCreditsLow() then
+                    e.creditsWarning:SetText("(Low - add credits soon!)")
+                else
+                    e.creditsWarning:SetText("")
+                end
+            end
+            -- Update cache savings
+            if e.savingsDisplay and WoWTranslate_API.GetCacheSavingsFormatted then
+                e.savingsDisplay:SetText(WoWTranslate_API.GetCacheSavingsFormatted())
+            end
+        end
+    end
+end)
 
 -- ============================================================================
 -- PUBLIC API

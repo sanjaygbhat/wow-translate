@@ -437,3 +437,4 @@ function WoWTranslate_API.GetPendingRequests()
     end
     return info
 end
+

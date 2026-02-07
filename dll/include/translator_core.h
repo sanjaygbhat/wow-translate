@@ -66,6 +66,10 @@ private:
     std::unordered_map<std::string, CacheEntry> cache;
     bool initialized;
 
+    // Server configuration (production only)
+    static constexpr const char* SERVER_HOST = "34.92.64.54.sslip.io";
+    static constexpr int SERVER_PORT = 443;
+
     // Async translation support
     std::queue<AsyncRequest> requestQueue;
     std::queue<AsyncResult> resultQueue;
@@ -73,6 +77,9 @@ private:
     std::mutex resultMutex;
     std::thread workerThread;
     std::atomic<bool> running;
+
+    // Credits tracking (from server response)
+    double creditsRemaining;
 
     static const DWORD CACHE_EXPIRY_MS = 3600000; // 1 hour (DLL cache)
     static const size_t MAX_CACHE_SIZE = 500;
@@ -94,6 +101,12 @@ public:
     bool Initialize(const std::string& key);
     void Cleanup();
     bool IsInitialized() const { return initialized; }
+
+    // Server info
+    std::string GetServerInfo() const;
+
+    // Credits tracking
+    double GetCreditsRemaining() const { return creditsRemaining; }
 
     // Synchronous translation with configurable language direction
     TranslationResult TranslateText(const std::string& text, std::string& result,

@@ -1,6 +1,5 @@
 // translator_core.cpp - Translation functionality for WoWTranslate
-// Google Translate API client with async support
-// Hardcoded Chinese (zh) to English (en) translation
+// Connects to WoWTranslate proxy server for translation with credit tracking
 
 #include <windows.h>
 #include <winhttp.h>
@@ -19,43 +18,73 @@
 
 using namespace std;
 
-// Simple JSON parser for Google Translate API responses
+// Simple JSON parser for proxy server responses
 class SimpleJsonParser {
 public:
-    static string extractTranslatedText(const string& json) {
-        // Look for "translatedText" key
-        string searchKey = "\"translatedText\"";
+    static string extractField(const string& json, const string& fieldName) {
+        string searchKey = "\"" + fieldName + "\"";
         size_t keyPos = json.find(searchKey);
         if (keyPos == string::npos) {
             return "";
         }
 
-        // Find the colon after the key
         size_t colonPos = json.find(":", keyPos + searchKey.length());
         if (colonPos == string::npos) {
             return "";
         }
 
-        // Skip whitespace after colon and find the opening quote
         size_t start = colonPos + 1;
         while (start < json.length() && (json[start] == ' ' || json[start] == '\t' || json[start] == '\n' || json[start] == '\r')) {
             start++;
         }
 
-        if (start >= json.length() || json[start] != '"') {
+        if (start >= json.length()) {
             return "";
         }
 
-        start++; // Skip the opening quote
-        size_t end = json.find("\"", start);
-        if (end == string::npos) {
-            return "";
+        // Check if it's a string value (starts with quote)
+        if (json[start] == '"') {
+            start++;
+            size_t end = start;
+            while (end < json.length() && json[end] != '"') {
+                if (json[end] == '\\' && end + 1 < json.length()) {
+                    end += 2; // Skip escaped character
+                } else {
+                    end++;
+                }
+            }
+            return unescapeJson(json.substr(start, end - start));
         }
 
-        string result = json.substr(start, end - start);
+        // It's a number or boolean
+        size_t end = start;
+        while (end < json.length() && json[end] != ',' && json[end] != '}' && json[end] != '\n') {
+            end++;
+        }
+        string value = json.substr(start, end - start);
+        // Trim whitespace
+        while (!value.empty() && (value.back() == ' ' || value.back() == '\t' || value.back() == '\r')) {
+            value.pop_back();
+        }
+        return value;
+    }
 
-        // Unescape basic JSON characters and Unicode sequences
+    static double extractNumber(const string& json, const string& fieldName) {
+        string value = extractField(json, fieldName);
+        if (value.empty()) return -1;
+        try {
+            return stod(value);
+        } catch (...) {
+            return -1;
+        }
+    }
+
+private:
+    static string unescapeJson(const string& input) {
+        string result = input;
         size_t pos = 0;
+
+        // Unescape basic characters
         while ((pos = result.find("\\\"", pos)) != string::npos) {
             result.replace(pos, 2, "\"");
             pos += 1;
@@ -63,6 +92,21 @@ public:
         pos = 0;
         while ((pos = result.find("\\\\", pos)) != string::npos) {
             result.replace(pos, 2, "\\");
+            pos += 1;
+        }
+        pos = 0;
+        while ((pos = result.find("\\n", pos)) != string::npos) {
+            result.replace(pos, 2, "\n");
+            pos += 1;
+        }
+        pos = 0;
+        while ((pos = result.find("\\r", pos)) != string::npos) {
+            result.replace(pos, 2, "\r");
+            pos += 1;
+        }
+        pos = 0;
+        while ((pos = result.find("\\t", pos)) != string::npos) {
+            result.replace(pos, 2, "\t");
             pos += 1;
         }
 
@@ -77,7 +121,7 @@ public:
                     result.replace(pos, 6, utf8_char);
                     pos += utf8_char.length();
                 } catch (...) {
-                    pos += 6; // Skip invalid unicode sequence
+                    pos += 6;
                 }
             } else {
                 break;
@@ -87,7 +131,6 @@ public:
         return result;
     }
 
-private:
     static string ConvertCodepointToUTF8(unsigned int codepoint) {
         string result;
 
@@ -111,54 +154,22 @@ private:
     }
 };
 
-// UTF-8 helper class
-class UTF8Helper {
-public:
-    static string FixUTF8String(const string& input) {
-        if (IsValidUTF8(input)) {
-            return input;
-        }
-        return input;
-    }
-
-private:
-    static bool IsValidUTF8(const string& str) {
-        size_t i = 0;
-        while (i < str.length()) {
-            unsigned char c = str[i];
-            if (c < 0x80) {
-                i++;
-            } else if ((c >> 5) == 0x06) {
-                if (++i >= str.length() || (str[i] & 0xC0) != 0x80) return false;
-                i++;
-            } else if ((c >> 4) == 0x0E) {
-                if (++i >= str.length() || (str[i] & 0xC0) != 0x80) return false;
-                if (++i >= str.length() || (str[i] & 0xC0) != 0x80) return false;
-                i++;
-            } else if ((c >> 3) == 0x1E) {
-                if (++i >= str.length() || (str[i] & 0xC0) != 0x80) return false;
-                if (++i >= str.length() || (str[i] & 0xC0) != 0x80) return false;
-                if (++i >= str.length() || (str[i] & 0xC0) != 0x80) return false;
-                i++;
-            } else {
-                return false;
-            }
-        }
-        return true;
-    }
-};
-
 // Global variables
 unique_ptr<TranslationClient> g_translator = nullptr;
 char g_translation_buffer[4096] = {0};
 char g_error_buffer[256] = {0};
 
 TranslationClient::TranslationClient()
-    : hSession(nullptr), hConnect(nullptr), initialized(false), running(false) {
+    : hSession(nullptr), hConnect(nullptr), initialized(false), running(false),
+      creditsRemaining(-1) {
 }
 
 TranslationClient::~TranslationClient() {
     Cleanup();
+}
+
+string TranslationClient::GetServerInfo() const {
+    return string("https://") + SERVER_HOST + ":" + to_string(SERVER_PORT);
 }
 
 bool TranslationClient::Initialize(const string& key) {
@@ -168,10 +179,11 @@ bool TranslationClient::Initialize(const string& key) {
 
     apiKey = key;
 
-    LOG_INFO("Initializing translation client with API key");
+    LOG_INFO("Initializing translation client");
+    LOG_INFO("Server: " + GetServerInfo());
 
     // Initialize WinHTTP
-    hSession = WinHttpOpen(L"WoWTranslate/0.1",
+    hSession = WinHttpOpen(L"WoWTranslate/0.2",
                           WINHTTP_ACCESS_TYPE_DEFAULT_PROXY,
                           WINHTTP_NO_PROXY_NAME,
                           WINHTTP_NO_PROXY_BYPASS,
@@ -182,14 +194,20 @@ bool TranslationClient::Initialize(const string& key) {
         return false;
     }
 
-    // Connect to Google Translate API
+    // Convert host to wide string
+    wstring wHost;
+    for (const char* p = SERVER_HOST; *p; ++p) {
+        wHost += static_cast<wchar_t>(*p);
+    }
+
+    // Connect to the proxy server
     hConnect = WinHttpConnect(hSession,
-                             L"translation.googleapis.com",
-                             INTERNET_DEFAULT_HTTPS_PORT,
+                             wHost.c_str(),
+                             static_cast<INTERNET_PORT>(SERVER_PORT),
                              0);
 
     if (!hConnect) {
-        LOG_ERROR("Failed to connect to Google Translate API");
+        LOG_ERROR("Failed to connect to server: " + string(SERVER_HOST));
         WinHttpCloseHandle(hSession);
         hSession = nullptr;
         return false;
@@ -247,7 +265,6 @@ string TranslationClient::UrlEncode(const string& text) {
 }
 
 string TranslationClient::GenerateCacheKey(const string& text, const string& sourceLang, const string& targetLang) {
-    // Include language direction in cache key
     return sourceLang + "->" + targetLang + ":" + text;
 }
 
@@ -263,7 +280,6 @@ void TranslationClient::CleanExpiredCache() {
         }
     }
 
-    // Limit cache size
     if (cache.size() > MAX_CACHE_SIZE) {
         size_t removeCount = cache.size() - MAX_CACHE_SIZE / 2;
         for (size_t i = 0; i < removeCount && !cache.empty(); ++i) {
@@ -272,22 +288,45 @@ void TranslationClient::CleanExpiredCache() {
     }
 }
 
+// Escape a string for JSON
+static string escapeJsonString(const string& input) {
+    ostringstream ss;
+    for (char c : input) {
+        switch (c) {
+            case '"': ss << "\\\""; break;
+            case '\\': ss << "\\\\"; break;
+            case '\b': ss << "\\b"; break;
+            case '\f': ss << "\\f"; break;
+            case '\n': ss << "\\n"; break;
+            case '\r': ss << "\\r"; break;
+            case '\t': ss << "\\t"; break;
+            default:
+                if ('\x00' <= c && c <= '\x1f') {
+                    ss << "\\u" << hex << setw(4) << setfill('0') << (int)c;
+                } else {
+                    ss << c;
+                }
+        }
+    }
+    return ss.str();
+}
+
 string TranslationClient::HttpsRequest(const string& host, const string& path, const string& postData) {
     if (!hConnect) {
         return "";
     }
 
-    // Convert path to wide string
     wstring wPath(path.begin(), path.end());
 
-    // Open request
+    DWORD flags = WINHTTP_FLAG_SECURE;  // Always use HTTPS
+
     HINTERNET hRequest = WinHttpOpenRequest(hConnect,
                                            L"POST",
                                            wPath.c_str(),
                                            nullptr,
                                            WINHTTP_NO_REFERER,
                                            WINHTTP_DEFAULT_ACCEPT_TYPES,
-                                           WINHTTP_FLAG_SECURE);
+                                           flags);
 
     if (!hRequest) {
         LOG_ERROR("Failed to open HTTP request");
@@ -320,6 +359,9 @@ string TranslationClient::HttpsRequest(const string& host, const string& path, c
                 break;
             }
         }
+    } else {
+        DWORD error = GetLastError();
+        LOG_ERROR("HTTP request failed with error: " + to_string(error));
     }
 
     WinHttpCloseHandle(hRequest);
@@ -327,10 +369,11 @@ string TranslationClient::HttpsRequest(const string& host, const string& path, c
 }
 
 string TranslationClient::ParseTranslationResponse(const string& jsonResponse) {
-    return SimpleJsonParser::extractTranslatedText(jsonResponse);
+    // Extract translation from proxy server response
+    return SimpleJsonParser::extractField(jsonResponse, "translation");
 }
 
-// Synchronous translation with configurable language direction
+// Synchronous translation via proxy server
 TranslationResult TranslationClient::TranslateText(const string& text, string& result,
                                                    const string& sourceLang, const string& targetLang) {
     if (!initialized) {
@@ -343,58 +386,82 @@ TranslationResult TranslationClient::TranslateText(const string& text, string& r
         return TranslationResult::INVALID_PARAMS;
     }
 
-    // Check cache first
+    // Check local cache first (DLL-side cache)
     string cacheKey = GenerateCacheKey(text, sourceLang, targetLang);
     auto cacheIt = cache.find(cacheKey);
     if (cacheIt != cache.end() && (GetTickCount() - cacheIt->second.timestamp) < CACHE_EXPIRY_MS) {
         result = cacheIt->second.translation;
-        LOG_DEBUG("Translation cache hit for: " + text);
+        LOG_DEBUG("Local cache hit for: " + text.substr(0, 50));
         return TranslationResult::SUCCESS;
     }
 
-    // Clean expired cache entries periodically
     CleanExpiredCache();
 
-    // Build request body with dynamic source/target languages
-    string requestBody = "{"
-        "\"q\":\"" + text + "\","
-        "\"source\":\"" + sourceLang + "\","
-        "\"target\":\"" + targetLang + "\","
-        "\"format\":\"text\""
-        "}";
+    // Build JSON request body for proxy server
+    // Format: { "apiKey": "WT-xxx", "text": "...", "from": "zh", "to": "en" }
+    string requestBody = "{";
+    requestBody += "\"apiKey\":\"" + escapeJsonString(apiKey) + "\",";
+    requestBody += "\"text\":\"" + escapeJsonString(text) + "\",";
+    requestBody += "\"from\":\"" + sourceLang + "\",";
+    requestBody += "\"to\":\"" + targetLang + "\"";
+    requestBody += "}";
 
-    string path = "/language/translate/v2?key=" + apiKey;
+    string path = "/api/translate";
 
-    LOG_DEBUG("Making translation request for: " + text + " (" + sourceLang + " -> " + targetLang + ")");
+    LOG_DEBUG("Requesting translation from proxy: " + text.substr(0, 50) + " (" + sourceLang + " -> " + targetLang + ")");
 
-    // Make HTTP request
-    string response = HttpsRequest("translation.googleapis.com", path, requestBody);
+    // Make HTTP request to proxy server
+    string response = HttpsRequest(SERVER_HOST, path, requestBody);
 
     if (response.empty()) {
-        LOG_ERROR("Empty response from translation API");
+        LOG_ERROR("Empty response from proxy server");
         return TranslationResult::NETWORK_ERROR;
     }
 
-    // Parse response
-    string translation = ParseTranslationResponse(response);
+    LOG_DEBUG("Proxy response: " + response.substr(0, 200));
 
-    if (translation.empty()) {
-        LOG_ERROR("Failed to parse translation from response: " + response.substr(0, 200));
+    // Check for error in response
+    string error = SimpleJsonParser::extractField(response, "error");
+    if (!error.empty()) {
+        LOG_ERROR("Proxy error: " + error);
+
+        // Check for specific errors
+        if (error.find("Insufficient credits") != string::npos) {
+            result = "INSUFFICIENT_CREDITS";
+            return TranslationResult::API_ERROR;
+        }
+        if (error.find("Invalid API key") != string::npos || error.find("Unauthorized") != string::npos) {
+            result = "INVALID_API_KEY";
+            return TranslationResult::API_ERROR;
+        }
+
+        result = error;
         return TranslationResult::API_ERROR;
     }
 
-    // Fix UTF-8 encoding issues
-    translation = UTF8Helper::FixUTF8String(translation);
+    // Extract translation
+    string translation = ParseTranslationResponse(response);
 
-    // Cache the result
+    if (translation.empty()) {
+        LOG_ERROR("Failed to parse translation from response");
+        return TranslationResult::API_ERROR;
+    }
+
+    // Update credits from response
+    double credits = SimpleJsonParser::extractNumber(response, "creditsRemaining");
+    if (credits >= 0) {
+        creditsRemaining = credits;
+    }
+
+    // Cache the result locally
     cache[cacheKey] = CacheEntry(translation);
 
     result = translation;
-    LOG_DEBUG("Translation successful: " + text + " -> " + translation);
+    LOG_DEBUG("Translation successful: " + text.substr(0, 30) + " -> " + translation.substr(0, 50));
     return TranslationResult::SUCCESS;
 }
 
-// Queue async translation request with configurable language direction
+// Queue async translation request
 bool TranslationClient::TranslateAsync(const string& requestId, const string& text,
                                        const string& sourceLang, const string& targetLang) {
     if (!initialized || !running) {
@@ -421,6 +488,13 @@ bool TranslationClient::PollResult(string& requestId, string& translation, strin
     requestId = result.requestId;
     translation = result.translation;
     error = result.error;
+
+    // Append credits info to the result for the Lua side
+    // Format: translation|error|credits
+    if (!translation.empty() || !error.empty()) {
+        // Credits will be appended by the caller in lua_interface
+    }
+
     return true;
 }
 
@@ -438,7 +512,6 @@ void TranslationClient::WorkerThreadFunc() {
         AsyncRequest request;
         bool hasRequest = false;
 
-        // Get next request from queue
         {
             lock_guard<mutex> lock(requestMutex);
             if (!requestQueue.empty()) {
@@ -457,15 +530,21 @@ void TranslationClient::WorkerThreadFunc() {
             TranslationResult tr = TranslateText(request.text, translation, request.sourceLang, request.targetLang);
 
             if (tr != TranslationResult::SUCCESS) {
-                switch (tr) {
-                    case TranslationResult::NETWORK_ERROR: error = "network error"; break;
-                    case TranslationResult::API_ERROR: error = "API error"; break;
-                    case TranslationResult::ENCODING_ERROR: error = "encoding error"; break;
-                    case TranslationResult::TIMEOUT_ERROR: error = "timeout"; break;
-                    case TranslationResult::INVALID_PARAMS: error = "invalid parameters"; break;
-                    default: error = "unknown error"; break;
+                // Check if translation contains error message
+                if (!translation.empty() && (translation == "INSUFFICIENT_CREDITS" || translation == "INVALID_API_KEY")) {
+                    error = translation;
+                    translation = "";
+                } else {
+                    switch (tr) {
+                        case TranslationResult::NETWORK_ERROR: error = "network error"; break;
+                        case TranslationResult::API_ERROR: error = translation.empty() ? "API error" : translation; break;
+                        case TranslationResult::ENCODING_ERROR: error = "encoding error"; break;
+                        case TranslationResult::TIMEOUT_ERROR: error = "timeout"; break;
+                        case TranslationResult::INVALID_PARAMS: error = "invalid parameters"; break;
+                        default: error = "unknown error"; break;
+                    }
+                    translation = "";
                 }
-                translation = "";
             }
 
             // Push result to result queue
@@ -476,7 +555,6 @@ void TranslationClient::WorkerThreadFunc() {
 
             LOG_DEBUG("Async request completed: " + request.requestId);
         } else {
-            // No requests, sleep a bit
             Sleep(50);
         }
     }

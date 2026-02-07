@@ -119,8 +119,9 @@ bool lua_isstring(void* L, int index) {
 //   UnitXP("WoWTranslate", "ping") -> "pong"
 //   UnitXP("WoWTranslate", "setkey", apiKey) -> "ok" or error
 //   UnitXP("WoWTranslate", "translate_async", requestId, text) -> "ok" or error
-//   UnitXP("WoWTranslate", "poll") -> "requestId|translation|error" or ""
+//   UnitXP("WoWTranslate", "poll") -> "requestId|translation|error|credits" or ""
 //   UnitXP("WoWTranslate", "status") -> status string
+//   UnitXP("WoWTranslate", "credits") -> get credits remaining
 int __fastcall detoured_UnitXP(void* L) {
     try {
         if (lua_gettop(L) >= 1) {
@@ -142,7 +143,7 @@ int __fastcall detoured_UnitXP(void* L) {
 
                     // VERSION - Get version string
                     else if (subcmd == "version") {
-                        lua_pushstring(L, "WoWTranslate v0.1 - Chinese to English Translation");
+                        lua_pushstring(L, "WoWTranslate v0.2 - Multi-language Translation via Proxy Server");
                         return 1;
                     }
 
@@ -151,13 +152,18 @@ int __fastcall detoured_UnitXP(void* L) {
                         string status = "WoWTranslate Status: DLL Active, Translator ";
                         status += (g_translator && g_translator->IsInitialized()) ? "Ready" : "Not Ready";
                         if (g_translator) {
+                            status += ", Server: " + g_translator->GetServerInfo();
                             status += ", Pending: " + to_string(g_translator->GetPendingCount());
+                            double credits = g_translator->GetCreditsRemaining();
+                            if (credits >= 0) {
+                                status += ", Credits: " + to_string(static_cast<int>(credits)) + " cents";
+                            }
                         }
                         lua_pushstring(L, status);
                         return 1;
                     }
 
-                    // SETKEY - Set the Google API key
+                    // SETKEY - Set the WoWTranslate API key
                     else if (subcmd == "setkey") {
                         if (lua_gettop(L) >= 3) {
                             string apiKey{ lua_tostring(L, 3) };
@@ -172,6 +178,21 @@ int __fastcall detoured_UnitXP(void* L) {
                             return 1;
                         }
                         lua_pushstring(L, "error|API key required");
+                        return 1;
+                    }
+
+                    // CREDITS - Get credits remaining
+                    else if (subcmd == "credits") {
+                        if (g_translator) {
+                            double credits = g_translator->GetCreditsRemaining();
+                            if (credits >= 0) {
+                                lua_pushnumber(L, credits);
+                            } else {
+                                lua_pushstring(L, "unknown");
+                            }
+                        } else {
+                            lua_pushstring(L, "error|translator not available");
+                        }
                         return 1;
                     }
 
@@ -214,7 +235,7 @@ int __fastcall detoured_UnitXP(void* L) {
                     }
 
                     // POLL - Poll for completed translation
-                    // Returns: "requestId|translation|" or "requestId||error" or ""
+                    // Returns: "requestId|translation|error|credits" or ""
                     else if (subcmd == "poll") {
                         if (!g_translator) {
                             lua_pushstring(L, "");
@@ -223,10 +244,12 @@ int __fastcall detoured_UnitXP(void* L) {
 
                         string requestId, translation, error;
                         if (g_translator->PollResult(requestId, translation, error)) {
-                            // Format: requestId|translation|error
-                            string result = requestId + "|" + translation + "|" + error;
+                            // Format: requestId|translation|error|credits
+                            double credits = g_translator->GetCreditsRemaining();
+                            string creditsStr = (credits >= 0) ? to_string(static_cast<int>(credits)) : "";
+                            string result = requestId + "|" + translation + "|" + error + "|" + creditsStr;
                             lua_pushstring(L, result);
-                            LOG_DEBUG("Poll returned: " + requestId);
+                            LOG_DEBUG("Poll returned: " + requestId + " (credits: " + creditsStr + ")");
                         } else {
                             // No results available
                             lua_pushstring(L, "");
