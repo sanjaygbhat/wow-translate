@@ -29,7 +29,7 @@
 
 ### 1. Download
 
-**[⬇️ Download Latest Release](../../releases/latest)** — or grab from [Actions](../../actions) (click latest build → `WoWTranslate-vXXX`)
+**[⬇️ Download Latest Release](../../releases/latest)**
 
 The download includes everything: DLL + Addon in one package.
 
@@ -51,7 +51,7 @@ YourWoWFolder/
 
 ### 3. Get API Key
 
-Contact the addon maintainer to receive a WoWTranslate API key with credits.
+API keys are distributed by the addon author. Each key comes with credits for translation.
 
 ### 4. Configure In-Game
 
@@ -119,7 +119,7 @@ Open settings with `/wt show`:
 | Problem | Solution |
 |---------|----------|
 | DLL not loading | Ensure `WoWTranslate.dll` is next to `WoW.exe` and listed in `dlls.txt` |
-| "Out of credits" | Contact maintainer to add credits to your API key |
+| "Out of credits" | Your API key needs more credits — contact whoever provided your key |
 | No translations | Run `/wt status` to check DLL loaded, then `/wt test 你好` |
 | Launcher issues | Run `WoW.exe` directly instead of through a launcher |
 
@@ -128,7 +128,7 @@ Open settings with `/wt show`:
 ## 🛠️ Building from Source
 
 <details>
-<summary>Click to expand</summary>
+<summary>For contributors</summary>
 
 **Requirements:** Windows, Visual Studio 2022, CMake 3.20+
 
@@ -138,7 +138,7 @@ cmake .. -G "Visual Studio 17 2022" -A Win32
 cmake --build . --config Release
 ```
 
-Or just push to main — GitHub Actions builds automatically.
+Output: `dll/build/bin/Release/WoWTranslate.dll`
 
 </details>
 
