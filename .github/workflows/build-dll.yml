@@ -31,25 +31,18 @@ jobs:
 
     - name: Create Release Package
       run: |
-        # Create package directory
         mkdir WoWTranslate
-
-        # Copy DLL
         copy dll\build\bin\Release\WoWTranslate.dll WoWTranslate\
-
-        # Copy addon
-        xcopy Interface\AddOns\WoWTranslate WoWTranslate\Interface\AddOns\WoWTranslate\ /E /I
-
-        # Create simple install instructions
-        echo WoWTranslate Installation > WoWTranslate\INSTALL.txt
-        echo ========================= >> WoWTranslate\INSTALL.txt
-        echo. >> WoWTranslate\INSTALL.txt
-        echo 1. Copy WoWTranslate.dll to your WoW folder (next to WoW.exe) >> WoWTranslate\INSTALL.txt
-        echo 2. Add "WoWTranslate.dll" to dlls.txt in your WoW folder >> WoWTranslate\INSTALL.txt
-        echo 3. Copy the Interface folder to your WoW folder (merges with existing) >> WoWTranslate\INSTALL.txt
-        echo 4. Launch WoW, then type: /wt key YOUR_API_KEY >> WoWTranslate\INSTALL.txt
-        echo. >> WoWTranslate\INSTALL.txt
-        echo For help: /wt show >> WoWTranslate\INSTALL.txt
+        xcopy Interface\AddOns\WoWTranslate WoWTranslate\Interface\AddOns\WoWTranslate\ /E /I /Q
+        echo WoWTranslate Installation> WoWTranslate\INSTALL.txt
+        echo =========================>> WoWTranslate\INSTALL.txt
+        echo.>> WoWTranslate\INSTALL.txt
+        echo 1. Copy WoWTranslate.dll to your WoW folder (next to WoW.exe)>> WoWTranslate\INSTALL.txt
+        echo 2. Add "WoWTranslate.dll" to dlls.txt in your WoW folder>> WoWTranslate\INSTALL.txt
+        echo 3. Copy the Interface folder to your WoW folder>> WoWTranslate\INSTALL.txt
+        echo 4. Launch WoW, then type: /wt key YOUR_API_KEY>> WoWTranslate\INSTALL.txt
+        echo.>> WoWTranslate\INSTALL.txt
+        echo For help: /wt show>> WoWTranslate\INSTALL.txt
       shell: cmd
 
     - name: Upload Package
