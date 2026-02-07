@@ -1,0 +1,49 @@
+name: Build WoWTranslate DLL
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'dll/**'
+  pull_request:
+    branches: [main]
+    paths:
+      - 'dll/**'
+  workflow_dispatch:  # Allow manual trigger
+
+jobs:
+  build:
+    runs-on: windows-latest
+
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Setup MSVC
+      uses: microsoft/setup-msbuild@v2
+
+    - name: Configure CMake
+      working-directory: dll
+      run: |
+        mkdir build
+        cd build
+        cmake .. -G "Visual Studio 17 2022" -A Win32
+
+    - name: Build DLL
+      working-directory: dll/build
+      run: cmake --build . --config Release
+
+    - name: Upload DLL artifact
+      uses: actions/upload-artifact@v4
+      with:
+        name: WoWTranslate-DLL
+        path: dll/build/bin/Release/WoWTranslate.dll
+        if-no-files-found: error
+
+    - name: Create Release (on tag)
+      if: startsWith(github.ref, 'refs/tags/')
+      uses: softprops/action-gh-release@v1
+      with:
+        files: dll/build/bin/Release/WoWTranslate.dll
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
