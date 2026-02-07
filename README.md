@@ -251,6 +251,24 @@ Google Cloud Translation: $20 per million characters
 - Test: `/wt test 老克` should return "Kel'Thuzad"
 - If returning different result, check WoWTranslate_Glossary.lua
 
+### DLL Not Loading with Game Launcher
+
+**Issue:** WoWTranslate.dll loads when running WoW.exe directly but NOT when using a game launcher.
+
+**Cause:** Some launchers may not load the DLL for translation unless it's specifically whitelisted. This could manifest as:
+- The launcher overwriting `dlls.txt` during updates
+- DLL loading options only available for pre-approved mods
+- No custom DLL support in the launcher at all
+
+**Solution:** Run WoW.exe directly instead of using the launcher:
+
+1. Navigate to your game installation folder
+2. Ensure `dlls.txt` contains `WoWTranslate.dll`
+3. Double-click **WoW.exe** directly (not the launcher)
+4. The game's integrated sideloader will load WoWTranslate.dll
+
+**After game updates:** If you use the launcher to update the game, you may need to re-add `WoWTranslate.dll` to dlls.txt afterward.
+
 ## Log Files
 
 | File | Location | Purpose |

@@ -99,17 +99,73 @@ local function DebugLog(a1, a2, a3, a4, a5)
 end
 
 -- ============================================================================
--- CHINESE CHARACTER DETECTION
+-- SOURCE LANGUAGE CHARACTER DETECTION
 -- ============================================================================
-local function ContainsChinese(text)
+-- Detects if text contains characters from the configured source language
+-- Supports: zh (Chinese), ja (Japanese), ko (Korean), ru (Russian)
+-- For Latin-based languages (en, de, fr, es, pt): detects non-ASCII characters
+
+local function ContainsLanguageChars(text, lang)
     if not text then return false end
+
     for i = 1, string.len(text) do
         local byte = string.byte(text, i)
-        if byte >= 228 and byte <= 233 then
-            return true
+
+        if lang == "zh" then
+            -- Chinese: CJK Unified Ideographs (U+4E00-U+9FFF)
+            -- UTF-8: bytes 228-233 as first byte
+            if byte >= 228 and byte <= 233 then
+                return true
+            end
+        elseif lang == "ja" then
+            -- Japanese: Hiragana, Katakana, and CJK
+            -- Hiragana/Katakana: U+3040-U+30FF (UTF-8: 227 as first byte)
+            -- CJK: same as Chinese
+            if byte == 227 or (byte >= 228 and byte <= 233) then
+                return true
+            end
+        elseif lang == "ko" then
+            -- Korean: Hangul syllables U+AC00-U+D7AF
+            -- UTF-8: bytes 234-237 as first byte (covers Hangul range)
+            if byte >= 234 and byte <= 237 then
+                return true
+            end
+        elseif lang == "ru" then
+            -- Russian: Cyrillic U+0400-U+04FF
+            -- UTF-8: bytes 208-209 as first byte
+            if byte == 208 or byte == 209 then
+                return true
+            end
+        else
+            -- Latin-based languages (en, de, fr, es, pt)
+            -- Detect extended ASCII / accented characters (UTF-8 multi-byte)
+            -- Any byte >= 128 indicates non-ASCII (potential accented chars)
+            if byte >= 192 and byte <= 223 then
+                -- 2-byte UTF-8 sequence start (covers Latin Extended, etc.)
+                return true
+            end
         end
     end
     return false
+end
+
+-- Check if text contains characters that need translation based on incoming settings
+local function ContainsSourceLanguage(text)
+    if not text then return false end
+    local sourceLang = WoWTranslateDB and WoWTranslateDB.incomingFromLang or "zh"
+    return ContainsLanguageChars(text, sourceLang)
+end
+
+-- Check if text contains outgoing target language (to prevent double-translation)
+local function ContainsOutgoingTargetLanguage(text)
+    if not text then return false end
+    local targetLang = WoWTranslateDB and WoWTranslateDB.outgoingToLang or "zh"
+    return ContainsLanguageChars(text, targetLang)
+end
+
+-- Legacy function name for compatibility
+local function ContainsChinese(text)
+    return ContainsLanguageChars(text, "zh")
 end
 
 -- ============================================================================
@@ -458,10 +514,10 @@ local function SplitIntoSegments(text)
     return segments
 end
 
--- Check if any text segments contain Chinese
+-- Check if any text segments contain source language characters
 local function HasTranslatableContent(segments)
     for _, seg in ipairs(segments) do
-        if seg.type == "text" and ContainsChinese(seg.content) then
+        if seg.type == "text" and ContainsSourceLanguage(seg.content) then
             return true
         end
     end
@@ -587,7 +643,7 @@ local function HookChatFrames()
                     return
                 end
 
-                if not text or not ContainsChinese(text) then
+                if not text or not ContainsSourceLanguage(text) then
                     frameOriginalAddMessage(self, text, r, g, b, id, holdTime)
                     return
                 end
@@ -640,6 +696,15 @@ local function HookChatFrames()
                     return
                 end
 
+                -- Check if credits are exhausted FIRST - if so, pass through original text
+                -- This skips both cache and API to show untranslated text
+                if WoWTranslate_API and WoWTranslate_API.IsCreditsExhausted() then
+                    DebugLog("Credits exhausted, passing through original (no cache, no API)")
+                    WoWTranslate_API.ShowCreditWarningIfNeeded()
+                    frameOriginalAddMessage(self, text, r, g, b, id, holdTime)
+                    return
+                end
+
                 -- Build text to send to translation API
                 local textToTranslate = BuildTranslatableText(segments)
 
@@ -649,6 +714,7 @@ local function HookChatFrames()
                 local cached, found = WoWTranslate_CacheGet(text)
                 if found then
                     DebugLog("Cache hit")
+                    WoWTranslate_API.TrackCacheHit(string.len(text))
                     frameOriginalAddMessage(self, cached, r, g, b, id, holdTime)
                     return
                 end
@@ -697,6 +763,16 @@ local function HookChatFrames()
                                 pending.originalAddMessage(pending.frame, finalText, pending.r, pending.g, pending.b, pending.id, pending.holdTime)
                             else
                                 DebugLog("API error:", err)
+                                -- Check for credit-related errors and show warning
+                                if err and (string.find(err, "INSUFFICIENT_CREDITS") or string.find(err, "Insufficient credits")) then
+                                    if originalAddMessage then
+                                        originalAddMessage(DEFAULT_CHAT_FRAME, "|cFFFF0000[WoWTranslate] Out of credits! Add more at wowtranslate.duckdns.org|r")
+                                    end
+                                elseif err and (string.find(err, "INVALID_API_KEY") or string.find(err, "Invalid API key")) then
+                                    if originalAddMessage then
+                                        originalAddMessage(DEFAULT_CHAT_FRAME, "|cFFFF0000[WoWTranslate] Invalid API key! Check your key in /wt show|r")
+                                    end
+                                end
                                 pending.originalAddMessage(pending.frame, pending.originalText, pending.r, pending.g, pending.b, pending.id, pending.holdTime)
                             end
                         end
@@ -769,15 +845,22 @@ local function HookedSendChatMessage(msg, chatType, language, channel)
         return originalSendChatMessage(msg, chatType, language, channel)
     end
 
-    -- Skip if already contains Chinese (don't double-translate)
-    if ContainsChinese(msg) then
-        DebugLog("Message already contains Chinese, skipping outgoing translation")
+    -- Skip if already contains target language (don't double-translate)
+    if ContainsOutgoingTargetLanguage(msg) then
+        DebugLog("Message already contains target language, skipping outgoing translation")
         return originalSendChatMessage(msg, chatType, language, channel)
     end
 
     -- Skip if DLL not available
     if not WoWTranslate_API or not WoWTranslate_API.IsAvailable() then
         DebugLog("DLL not available for outgoing translation")
+        return originalSendChatMessage(msg, chatType, language, channel)
+    end
+
+    -- Skip if credits are exhausted
+    if WoWTranslate_API.IsCreditsExhausted() then
+        DebugLog("Credits exhausted, sending original")
+        WoWTranslate_API.ShowCreditWarningIfNeeded()
         return originalSendChatMessage(msg, chatType, language, channel)
     end
 
@@ -826,7 +909,7 @@ local function HookedSendChatMessage(msg, chatType, language, channel)
             DebugLog("Outgoing reconstructed:", reconstructed)
 
             -- Build message with prefix
-            local prefix = WoWTranslateDB.outgoingPrefix or "[Translated]"
+            local prefix = WoWTranslateDB.outgoingPrefix or "[Translated by WoWTranslate]"
             local finalMsg = prefix .. " " .. reconstructed
 
             -- Truncate if over 255 bytes (WoW chat limit)
@@ -874,6 +957,34 @@ end
 -- Check if hook is active (for diagnostics)
 local function IsOutgoingHookActive()
     return outgoingHookInstalled and SendChatMessage == HookedSendChatMessage
+end
+
+-- ============================================================================
+-- GLOBAL FUNCTIONS FOR CONFIG UI
+-- ============================================================================
+
+-- Toggle outgoing translation (called from config UI)
+function WoWTranslate_SetOutgoingEnabled(enabled)
+    if enabled then
+        WoWTranslateDB.outgoingEnabled = true
+        InstallOutgoingHook()
+    else
+        WoWTranslateDB.outgoingEnabled = false
+        RemoveOutgoingHook()
+    end
+end
+
+-- Toggle incoming translation (called from config UI)
+function WoWTranslate_SetIncomingEnabled(enabled)
+    WoWTranslateDB.enabled = enabled
+end
+
+-- Set channel enabled state (called from config UI)
+function WoWTranslate_SetChannelEnabled(channel, enabled)
+    if not WoWTranslateDB.outgoingChannels then
+        WoWTranslateDB.outgoingChannels = {}
+    end
+    WoWTranslateDB.outgoingChannels[channel] = enabled
 end
 
 -- ============================================================================
@@ -935,8 +1046,20 @@ SlashCmdList["WOWTRANSLATE"] = function(msg)
             and "|cFF00FF00ACTIVE|r"
             or "|cFFFF0000INACTIVE|r"
 
+        -- Get credits info
+        local creditsStr = WoWTranslate_API.GetCreditsFormatted and WoWTranslate_API.GetCreditsFormatted() or "Unknown"
+        local creditsLow = WoWTranslate_API.IsCreditsLow and WoWTranslate_API.IsCreditsLow()
+        local creditsExhausted = WoWTranslate_API.IsCreditsExhausted and WoWTranslate_API.IsCreditsExhausted()
+
         DEFAULT_CHAT_FRAME:AddMessage("[WoWTranslate] Status:")
         DEFAULT_CHAT_FRAME:AddMessage("  DLL: " .. dllStatus)
+        if creditsExhausted then
+            DEFAULT_CHAT_FRAME:AddMessage("  Credits: |cFFFF0000" .. creditsStr .. " (EXHAUSTED - translation disabled)|r")
+        elseif creditsLow then
+            DEFAULT_CHAT_FRAME:AddMessage("  Credits: |cFFFF0000" .. creditsStr .. " (LOW!)|r")
+        else
+            DEFAULT_CHAT_FRAME:AddMessage("  Credits: |cFF00FF00" .. creditsStr .. "|r")
+        end
         DEFAULT_CHAT_FRAME:AddMessage("  Incoming (CN->EN): " .. (WoWTranslateDB.enabled and "|cFF00FF00ON|r" or "|cFFFF0000OFF|r"))
         DEFAULT_CHAT_FRAME:AddMessage("  Outgoing (EN->CN): " .. outgoingStatus)
         DEFAULT_CHAT_FRAME:AddMessage("  Outgoing Hook: " .. hookStatus)
@@ -1162,6 +1285,11 @@ local function InitializeSettings()
         end
     end
 
+    -- Migration: fix old short prefix to new full prefix
+    if WoWTranslateDB.outgoingPrefix == "[Translated]" then
+        WoWTranslateDB.outgoingPrefix = "[Translated by WoWTranslate]"
+    end
+
     DEBUG_MODE = WoWTranslateDB.debugMode or false
 end
 
@@ -1185,7 +1313,7 @@ local function OnAddonLoaded()
     local cacheCount = WoWTranslate_CacheStats().entries
     local dllStatus = dllOk and "|cFF00FF00DLL OK|r" or "|cFFFFFF00DLL not loaded|r"
 
-    DEFAULT_CHAT_FRAME:AddMessage("|cFF00CCFFWoWTranslate|r v0.9 - " .. dllStatus .. " | /wt show")
+    DEFAULT_CHAT_FRAME:AddMessage("|cFF00CCFFWoWTranslate|r v0.10 - " .. dllStatus .. " | /wt show")
 end
 
 local function OnPlayerLogin()
@@ -1257,6 +1385,14 @@ local function ProcessItemCacheMessage(queued)
         return
     end
 
+    -- Check if credits are exhausted FIRST - if so, pass through original (no cache, no API)
+    if WoWTranslate_API and WoWTranslate_API.IsCreditsExhausted() then
+        DebugLog("Credits exhausted, passing through item message (no cache, no API)")
+        WoWTranslate_API.ShowCreditWarningIfNeeded()
+        queued.originalAddMessage(queued.frame, text, queued.r, queued.g, queued.b, queued.id, queued.holdTime)
+        return
+    end
+
     -- Build text to send to translation API
     local textToTranslate = BuildTranslatableText(segments)
 
@@ -1264,6 +1400,7 @@ local function ProcessItemCacheMessage(queued)
     local cached, found = WoWTranslate_CacheGet(text)
     if found then
         DebugLog("Cache hit for item message")
+        WoWTranslate_API.TrackCacheHit(string.len(text))
         queued.originalAddMessage(queued.frame, cached, queued.r, queued.g, queued.b, queued.id, queued.holdTime)
         return
     end
