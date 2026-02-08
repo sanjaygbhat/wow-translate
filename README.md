@@ -7,7 +7,7 @@
 
 <p align="center">
   <img src="https://img.shields.io/badge/WoW-1.12-blue" alt="WoW 1.12">
-  <img src="https://img.shields.io/badge/version-0.10-green" alt="Version 0.10">
+  <img src="https://img.shields.io/badge/version-0.11-green" alt="Version 0.11">
   <img src="https://img.shields.io/github/license/sanjaygbhat/wow-translate" alt="License">
 </p>
 
@@ -22,6 +22,9 @@
 | ⚡ **Instant Cache** | Previously seen translations are instant and free |
 | 💬 **Outgoing Translation** | Type in English, send in Chinese (or other languages) |
 | 🔗 **Hyperlink Safe** | Player names, items, and quests stay clickable |
+| 🗺️ **Minimap Button** | One-click access to settings, draggable around the minimap |
+| 📺 **Channel Filtering** | Choose exactly which channels get translated |
+| 💤 **AFK Auto-Pause** | Saves credits by pausing translation while you're AFK |
 
 ---
 
@@ -57,10 +60,9 @@ API keys are distributed by the addon author. Each key comes with credits for tr
 
 ```
 /wt key WT-XXXX-XXXX        Set your API key
-/wt show                     Open settings panel
 ```
 
-**Done!** Chat messages will now appear translated.
+**Done!** A minimap button (scroll icon) appears — click it to open settings. Chat messages will now appear translated.
 
 ---
 
@@ -111,6 +113,8 @@ Open settings with `/wt show`:
 
 - **Incoming**: What language to translate FROM (Chinese, Japanese, Korean, Russian)
 - **Outgoing**: Enable translation for Say, Party, Guild, Whisper, etc.
+- **Channel Filtering**: Toggle individual channels (Say, Yell, Whisper, Party, Guild, Raid, Battleground, World/Local) for both incoming and outgoing
+- **AFK Pause**: Translation pauses while AFK to save credits (on by default, configurable)
 
 ---
 

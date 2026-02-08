@@ -92,7 +92,7 @@ end
 local configFrame = CreateFrame("Frame", "WoWTranslateConfigFrame", UIParent)
 configFrame:Hide()
 configFrame:SetWidth(420)
-configFrame:SetHeight(620)  -- Increased for credits display
+configFrame:SetHeight(750)  -- Increased for incoming/outgoing channel toggles
 configFrame:SetPoint("CENTER", 0, 0)
 configFrame:SetMovable(true)
 configFrame:EnableMouse(true)
@@ -192,6 +192,12 @@ local function CreateCheckbox(label, xPos, yPos, configKey, subKey)
                 WoWTranslate_TempConfig.outgoingChannels = {}
             end
             WoWTranslate_TempConfig.outgoingChannels[sub] = enabled
+        elseif key == "incomingChannels" and sub then
+            WoWTranslate_SetIncomingChannelEnabled(sub, enabled)
+            if not WoWTranslate_TempConfig.incomingChannels then
+                WoWTranslate_TempConfig.incomingChannels = {}
+            end
+            WoWTranslate_TempConfig.incomingChannels[sub] = enabled
         else
             -- Fallback for any other settings
             if sub then
@@ -290,13 +296,19 @@ local Y_IN_HEADER = -175
 local Y_IN_ENABLE = -205
 local Y_IN_LANG = -240
 
-local Y_OUT_HEADER = -310
-local Y_OUT_ENABLE = -340
-local Y_OUT_LANG = -375
+local Y_IN_CH_LABEL = -310
+local Y_IN_CH_ROW1 = -335
+local Y_IN_CH_ROW2 = -365
+local Y_IN_CH_ROW3 = -395
 
-local Y_CH_LABEL = -445
-local Y_CH_ROW1 = -470
-local Y_CH_ROW2 = -500
+local Y_OUT_HEADER = -430
+local Y_OUT_ENABLE = -460
+local Y_OUT_LANG = -495
+
+local Y_CH_LABEL = -565
+local Y_CH_ROW1 = -590
+local Y_CH_ROW2 = -620
+local Y_CH_ROW3 = -650
 
 -- API Settings Section
 CreateHeader("API Settings", Y_API_HEADER)
@@ -391,8 +403,28 @@ configFrame.elements.savingsDisplay = savingsDisplay
 -- Incoming Translation Section
 CreateHeader("Incoming Translation (Chat -> You)", Y_IN_HEADER)
 configFrame.elements.inEnabled = CreateCheckbox("Enable Incoming Translation", 25, Y_IN_ENABLE, "enabled", nil)
+configFrame.elements.afkDisable = CreateCheckbox("Disable while AFK", 250, Y_IN_ENABLE, "disableWhileAfk", nil)
 configFrame.elements.inFrom = CreateLangSelector("From:", 25, Y_IN_LANG, "incomingFromLang")
 configFrame.elements.inTo = CreateLangSelector("To:", 210, Y_IN_LANG, "incomingToLang")
+
+-- Incoming Channels Section
+local inChLabel = configFrame:CreateFontString(nil, "ARTWORK", "GameFontNormal")
+inChLabel:SetPoint("TOPLEFT", configFrame, "TOPLEFT", 25, Y_IN_CH_LABEL)
+inChLabel:SetText("Translate Incoming Channels:")
+
+-- Row 1: Say, Yell, Whisper
+configFrame.elements.inChSay = CreateCheckbox("Say", 25, Y_IN_CH_ROW1, "incomingChannels", "SAY")
+configFrame.elements.inChYell = CreateCheckbox("Yell", 140, Y_IN_CH_ROW1, "incomingChannels", "YELL")
+configFrame.elements.inChWhisper = CreateCheckbox("Whisper", 255, Y_IN_CH_ROW1, "incomingChannels", "WHISPER")
+
+-- Row 2: Party, Guild, Raid
+configFrame.elements.inChParty = CreateCheckbox("Party", 25, Y_IN_CH_ROW2, "incomingChannels", "PARTY")
+configFrame.elements.inChGuild = CreateCheckbox("Guild", 140, Y_IN_CH_ROW2, "incomingChannels", "GUILD")
+configFrame.elements.inChRaid = CreateCheckbox("Raid", 255, Y_IN_CH_ROW2, "incomingChannels", "RAID")
+
+-- Row 3: BG, Channel
+configFrame.elements.inChBG = CreateCheckbox("Battleground", 25, Y_IN_CH_ROW3, "incomingChannels", "BATTLEGROUND")
+configFrame.elements.inChChannel = CreateCheckbox("World/Local", 165, Y_IN_CH_ROW3, "incomingChannels", "CHANNEL")
 
 -- Outgoing Translation Section
 CreateHeader("Outgoing Translation (You -> Chat)", Y_OUT_HEADER)
@@ -414,6 +446,10 @@ configFrame.elements.chSay = CreateCheckbox("Say", 255, Y_CH_ROW1, "outgoingChan
 configFrame.elements.chGuild = CreateCheckbox("Guild", 25, Y_CH_ROW2, "outgoingChannels", "GUILD")
 configFrame.elements.chRaid = CreateCheckbox("Raid", 140, Y_CH_ROW2, "outgoingChannels", "RAID")
 configFrame.elements.chYell = CreateCheckbox("Yell", 255, Y_CH_ROW2, "outgoingChannels", "YELL")
+
+-- Row 3: BG, Channel
+configFrame.elements.chBG = CreateCheckbox("Battleground", 25, Y_CH_ROW3, "outgoingChannels", "BATTLEGROUND")
+configFrame.elements.chChannel = CreateCheckbox("World/Local", 165, Y_CH_ROW3, "outgoingChannels", "CHANNEL")
 
 -- Bottom Buttons
 local clearBtn = CreateFrame("Button", nil, configFrame, "UIPanelButtonTemplate")
@@ -480,6 +516,7 @@ local function RefreshUI()
     end
 
     if e.inEnabled then e.inEnabled:SetChecked(cfg.enabled) end
+    if e.afkDisable then e.afkDisable:SetChecked(cfg.disableWhileAfk) end
     if e.outEnabled then e.outEnabled:SetChecked(cfg.outgoingEnabled) end
 
     if e.inFrom and e.inFrom.display then
@@ -495,6 +532,18 @@ local function RefreshUI()
         e.outTo.display:SetText(GetLanguageName(cfg.outgoingToLang or "zh"))
     end
 
+    -- Incoming channels
+    local inCh = cfg.incomingChannels or {}
+    if e.inChSay then e.inChSay:SetChecked(inCh.SAY) end
+    if e.inChYell then e.inChYell:SetChecked(inCh.YELL) end
+    if e.inChWhisper then e.inChWhisper:SetChecked(inCh.WHISPER) end
+    if e.inChParty then e.inChParty:SetChecked(inCh.PARTY) end
+    if e.inChGuild then e.inChGuild:SetChecked(inCh.GUILD) end
+    if e.inChRaid then e.inChRaid:SetChecked(inCh.RAID) end
+    if e.inChBG then e.inChBG:SetChecked(inCh.BATTLEGROUND) end
+    if e.inChChannel then e.inChChannel:SetChecked(inCh.CHANNEL) end
+
+    -- Outgoing channels
     local ch = cfg.outgoingChannels or {}
     if e.chWhisper then e.chWhisper:SetChecked(ch.WHISPER) end
     if e.chParty then e.chParty:SetChecked(ch.PARTY) end
@@ -502,6 +551,8 @@ local function RefreshUI()
     if e.chGuild then e.chGuild:SetChecked(ch.GUILD) end
     if e.chRaid then e.chRaid:SetChecked(ch.RAID) end
     if e.chYell then e.chYell:SetChecked(ch.YELL) end
+    if e.chBG then e.chBG:SetChecked(ch.BATTLEGROUND) end
+    if e.chChannel then e.chChannel:SetChecked(ch.CHANNEL) end
 end
 
 -- ============================================================================

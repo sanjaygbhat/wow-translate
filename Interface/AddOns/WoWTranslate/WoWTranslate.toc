@@ -1,7 +1,7 @@
 ## Interface: 11200
 ## Title: WoWTranslate
 ## Notes: Real-time translation for WoW 1.12 (Beta API with credit system)
-## Version: 0.10
+## Version: 0.11
 ## Author: WoWTranslate Team
 ## SavedVariables: WoWTranslateDB WoWTranslateCache WoWTranslateDebugLog
 
@@ -9,4 +9,5 @@ WoWTranslate_Glossary.lua
 WoWTranslate_Cache.lua
 WoWTranslate_API.lua
 WoWTranslate_Config.lua
+WoWTranslate_Minimap.lua
 WoWTranslate.lua

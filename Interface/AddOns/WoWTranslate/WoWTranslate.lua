@@ -14,6 +14,7 @@ WoWTranslateDebugLog = WoWTranslateDebugLog or {}
 local DEBUG_MODE = false
 local addonLoaded = false
 local originalAddMessage = nil
+local playerIsAFK = false
 
 local pendingMessages = {}
 local messageCounter = 0
@@ -22,6 +23,23 @@ local messageCounter = 0
 local outgoingQueue = {}
 local outgoingCounter = 0
 local originalSendChatMessage = SendChatMessage
+
+-- Incoming channel detection state
+local currentIncomingChannel = nil
+local EVENT_TO_CHANNEL = {
+    CHAT_MSG_SAY = "SAY",
+    CHAT_MSG_YELL = "YELL",
+    CHAT_MSG_WHISPER = "WHISPER",
+    CHAT_MSG_PARTY = "PARTY",
+    CHAT_MSG_GUILD = "GUILD",
+    CHAT_MSG_OFFICER = "GUILD",
+    CHAT_MSG_RAID = "RAID",
+    CHAT_MSG_RAID_LEADER = "RAID",
+    CHAT_MSG_RAID_WARNING = "RAID",
+    CHAT_MSG_BATTLEGROUND = "BATTLEGROUND",
+    CHAT_MSG_BATTLEGROUND_LEADER = "BATTLEGROUND",
+    CHAT_MSG_CHANNEL = "CHANNEL",
+}
 
 local defaults = {
     enabled = true,
@@ -36,8 +54,21 @@ local defaults = {
         RAID = true,
         SAY = true,
         YELL = true,
+        BATTLEGROUND = true,
+        CHANNEL = true,
+    },
+    incomingChannels = {
+        SAY = true,
+        YELL = true,
+        WHISPER = true,
+        PARTY = true,
+        GUILD = true,
+        RAID = true,
+        BATTLEGROUND = true,
+        CHANNEL = true,
     },
     outgoingPrefix = "[Translated by WoWTranslate]",
+    disableWhileAfk = true,
     -- Language settings (any-to-any translation)
     incomingFromLang = "zh",
     incomingToLang = "en",
@@ -648,6 +679,21 @@ local function HookChatFrames()
                     return
                 end
 
+                -- Skip translation while AFK
+                if WoWTranslateDB.disableWhileAfk and playerIsAFK then
+                    frameOriginalAddMessage(self, text, r, g, b, id, holdTime)
+                    return
+                end
+
+                -- Check incoming channel filter
+                if currentIncomingChannel then
+                    local inChannels = WoWTranslateDB.incomingChannels
+                    if inChannels and not inChannels[currentIncomingChannel] then
+                        frameOriginalAddMessage(self, text, r, g, b, id, holdTime)
+                        return
+                    end
+                end
+
                 -- Log original message for debugging
                 DebugLog("ORIGINAL MSG:", string.sub(text, 1, 150))
 
@@ -766,7 +812,7 @@ local function HookChatFrames()
                                 -- Check for credit-related errors and show warning
                                 if err and (string.find(err, "INSUFFICIENT_CREDITS") or string.find(err, "Insufficient credits")) then
                                     if originalAddMessage then
-                                        originalAddMessage(DEFAULT_CHAT_FRAME, "|cFFFF0000[WoWTranslate] Out of credits! Add more at wowtranslate.duckdns.org|r")
+                                        originalAddMessage(DEFAULT_CHAT_FRAME, "|cFFFF0000[WoWTranslate] Out of credits! Contact the addon author to add more credits.|r")
                                     end
                                 elseif err and (string.find(err, "INVALID_API_KEY") or string.find(err, "Invalid API key")) then
                                     if originalAddMessage then
@@ -831,6 +877,11 @@ local function HookedSendChatMessage(msg, chatType, language, channel)
 
     -- Skip if outgoing disabled
     if not WoWTranslateDB or not WoWTranslateDB.outgoingEnabled then
+        return originalSendChatMessage(msg, chatType, language, channel)
+    end
+
+    -- Skip translation while AFK
+    if WoWTranslateDB.disableWhileAfk and playerIsAFK then
         return originalSendChatMessage(msg, chatType, language, channel)
     end
 
@@ -979,12 +1030,20 @@ function WoWTranslate_SetIncomingEnabled(enabled)
     WoWTranslateDB.enabled = enabled
 end
 
--- Set channel enabled state (called from config UI)
+-- Set outgoing channel enabled state (called from config UI)
 function WoWTranslate_SetChannelEnabled(channel, enabled)
     if not WoWTranslateDB.outgoingChannels then
         WoWTranslateDB.outgoingChannels = {}
     end
     WoWTranslateDB.outgoingChannels[channel] = enabled
+end
+
+-- Set incoming channel enabled state (called from config UI)
+function WoWTranslate_SetIncomingChannelEnabled(channel, enabled)
+    if not WoWTranslateDB.incomingChannels then
+        WoWTranslateDB.incomingChannels = {}
+    end
+    WoWTranslateDB.incomingChannels[channel] = enabled
 end
 
 -- ============================================================================
@@ -1208,7 +1267,7 @@ SlashCmdList["WOWTRANSLATE"] = function(msg)
                 DEFAULT_CHAT_FRAME:AddMessage("[WoWTranslate] Outgoing " .. channelType .. ": " .. newStatus)
             else
                 DEFAULT_CHAT_FRAME:AddMessage("|cFFFF0000[WoWTranslate] Unknown channel: " .. channelType .. "|r")
-                DEFAULT_CHAT_FRAME:AddMessage("  Valid channels: WHISPER, PARTY, GUILD, RAID, SAY, YELL")
+                DEFAULT_CHAT_FRAME:AddMessage("  Valid channels: WHISPER, PARTY, GUILD, RAID, SAY, YELL, BATTLEGROUND, CHANNEL")
             end
         else
             DEFAULT_CHAT_FRAME:AddMessage("[WoWTranslate] Outgoing channel settings:")
@@ -1216,7 +1275,7 @@ SlashCmdList["WOWTRANSLATE"] = function(msg)
                 local status = enabled and "|cFF00FF00ON|r" or "|cFFFF0000OFF|r"
                 DEFAULT_CHAT_FRAME:AddMessage("  " .. channelType .. ": " .. status)
             end
-            DEFAULT_CHAT_FRAME:AddMessage("  Usage: /wt outchannel <WHISPER|PARTY|GUILD|RAID|SAY|YELL>")
+            DEFAULT_CHAT_FRAME:AddMessage("  Usage: /wt outchannel <WHISPER|PARTY|GUILD|RAID|SAY|YELL|BATTLEGROUND|CHANNEL>")
         end
 
     elseif cmd == "prefix" then
@@ -1290,6 +1349,24 @@ local function InitializeSettings()
         WoWTranslateDB.outgoingPrefix = "[Translated by WoWTranslate]"
     end
 
+    -- Migration: add BATTLEGROUND/CHANNEL to existing outgoingChannels
+    if WoWTranslateDB.outgoingChannels then
+        if WoWTranslateDB.outgoingChannels.BATTLEGROUND == nil then
+            WoWTranslateDB.outgoingChannels.BATTLEGROUND = true
+        end
+        if WoWTranslateDB.outgoingChannels.CHANNEL == nil then
+            WoWTranslateDB.outgoingChannels.CHANNEL = true
+        end
+    end
+
+    -- Migration: create incomingChannels if it doesn't exist
+    if not WoWTranslateDB.incomingChannels then
+        WoWTranslateDB.incomingChannels = {}
+        for k, v in pairs(defaults.incomingChannels) do
+            WoWTranslateDB.incomingChannels[k] = v
+        end
+    end
+
     DEBUG_MODE = WoWTranslateDB.debugMode or false
 end
 
@@ -1298,6 +1375,10 @@ local function OnAddonLoaded()
     addonLoaded = true
 
     InitializeSettings()
+
+    if WoWTranslate_MinimapButton_Init then
+        pcall(WoWTranslate_MinimapButton_Init)
+    end
 
     local dllOk = WoWTranslate_API.CheckDLL()
 
@@ -1318,6 +1399,14 @@ end
 
 local function OnPlayerLogin()
     HookChatFrames()
+
+    -- Hook ChatFrame_OnEvent to detect incoming channel for filtering
+    local originalChatFrameOnEvent = ChatFrame_OnEvent
+    ChatFrame_OnEvent = function(event)
+        currentIncomingChannel = EVENT_TO_CHANNEL[event]
+        originalChatFrameOnEvent(event)
+        currentIncomingChannel = nil
+    end
 
     if not WoWTranslate_API.IsAvailable() then
         WoWTranslate_API.CheckDLL()
@@ -1341,12 +1430,24 @@ end
 local eventFrame = CreateFrame("Frame")
 eventFrame:RegisterEvent("ADDON_LOADED")
 eventFrame:RegisterEvent("PLAYER_LOGIN")
+eventFrame:RegisterEvent("PLAYER_FLAGS_CHANGED")
+eventFrame:RegisterEvent("CHAT_MSG_SYSTEM")
 
 eventFrame:SetScript("OnEvent", function()
     if event == "ADDON_LOADED" and arg1 == "WoWTranslate" then
         OnAddonLoaded()
     elseif event == "PLAYER_LOGIN" then
         OnPlayerLogin()
+    elseif event == "PLAYER_FLAGS_CHANGED" and arg1 == "player" then
+        if UnitIsAFK then
+            playerIsAFK = (UnitIsAFK("player") == 1) or (UnitIsAFK("player") == true)
+        end
+    elseif event == "CHAT_MSG_SYSTEM" then
+        if arg1 and string.find(arg1, "You are now AFK") then
+            playerIsAFK = true
+        elseif arg1 and string.find(arg1, "You are no longer AFK") then
+            playerIsAFK = false
+        end
     end
 end)
 

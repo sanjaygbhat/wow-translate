@@ -119,7 +119,7 @@ function WoWTranslate_API.ShowCreditWarningIfNeeded()
     if now - lastCreditWarningTime >= 60 then
         lastCreditWarningTime = now
         if DEFAULT_CHAT_FRAME then
-            DEFAULT_CHAT_FRAME:AddMessage("|cFFFF0000[WoWTranslate] Out of credits! Translation disabled. Add more credits to continue.|r")
+            DEFAULT_CHAT_FRAME:AddMessage("|cFFFF0000[WoWTranslate] Out of credits! Translation disabled. Contact the addon author to add more credits.|r")
         end
         return true
     end
@@ -296,6 +296,7 @@ local function PollTranslations()
             -- Update credits if we got a value
             if credits and credits >= 0 then
                 creditsRemaining = credits
+                creditsExhausted = (credits == 0)
             end
 
             if requestId and pendingRequests[requestId] then
@@ -315,9 +316,7 @@ local function PollTranslations()
 
                         req.callback(nil, err)
                     else
-                        -- Successful translation - reset exhausted state
                         lastError = nil
-                        creditsExhausted = false
                         req.callback(translation, nil)
                     end
                 end
