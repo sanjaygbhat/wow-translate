@@ -24,8 +24,24 @@ local outgoingQueue = {}
 local outgoingCounter = 0
 local originalSendChatMessage = SendChatMessage
 
+-- Pre-translated prefixes for outgoing messages (zero API cost)
+local TRANSLATED_PREFIXES = {
+    zh = "[由WoWTranslate翻译]",
+    en = "[Translated by WoWTranslate]",
+    ko = "[WoWTranslate 번역]",
+    ja = "[WoWTranslate翻訳]",
+    ru = "[Переведено WoWTranslate]",
+    de = "[Übersetzt von WoWTranslate]",
+    fr = "[Traduit par WoWTranslate]",
+    es = "[Traducido por WoWTranslate]",
+    pt = "[Traduzido por WoWTranslate]",
+}
+local DEFAULT_PREFIX = "[Translated by WoWTranslate]"
+
 -- Incoming channel detection state
 local currentIncomingChannel = nil
+local currentIsSystemEvent = false  -- True for system/emote/NPC events
+
 local EVENT_TO_CHANNEL = {
     CHAT_MSG_SAY = "SAY",
     CHAT_MSG_YELL = "YELL",
@@ -39,6 +55,27 @@ local EVENT_TO_CHANNEL = {
     CHAT_MSG_BATTLEGROUND = "BATTLEGROUND",
     CHAT_MSG_BATTLEGROUND_LEADER = "BATTLEGROUND",
     CHAT_MSG_CHANNEL = "CHANNEL",
+}
+
+-- Events to skip translation for (system msgs, emotes, NPC speech, notifications)
+-- Only these specific events are skipped; unknown events (like WHISPER_INFORM) still translate
+local SYSTEM_EVENTS = {
+    CHAT_MSG_SYSTEM = true,
+    CHAT_MSG_EMOTE = true,
+    CHAT_MSG_TEXT_EMOTE = true,
+    CHAT_MSG_MONSTER_SAY = true,
+    CHAT_MSG_MONSTER_YELL = true,
+    CHAT_MSG_MONSTER_EMOTE = true,
+    CHAT_MSG_MONSTER_WHISPER = true,
+    CHAT_MSG_CHANNEL_JOIN = true,
+    CHAT_MSG_CHANNEL_LEAVE = true,
+    CHAT_MSG_LOOT = true,
+    CHAT_MSG_MONEY = true,
+    CHAT_MSG_OPENING = true,
+    CHAT_MSG_SKILL = true,
+    CHAT_MSG_COMBAT_HONOR_GAIN = true,
+    CHAT_MSG_COMBAT_XP_GAIN = true,
+    CHAT_MSG_COMBAT_MISC_INFO = true,
 }
 
 local defaults = {
@@ -69,6 +106,7 @@ local defaults = {
     },
     outgoingPrefix = "[Translated by WoWTranslate]",
     disableWhileAfk = true,
+    translateSystemMessages = false,  -- Don't translate system msgs, emotes, NPC speech
     -- Language settings (any-to-any translation)
     incomingFromLang = "zh",
     incomingToLang = "en",
@@ -342,10 +380,10 @@ local function GetEnglishQuestName(questId)
         return nil  -- pfQuest not loaded
     end
 
-    -- Try Turtle WoW custom quests first (more specific)
-    local turtleQuests = pfDB["quests"]["enUS-turtle"]
-    if turtleQuests and turtleQuests[questId] then
-        local entry = turtleQuests[questId]
+    -- Try custom quests first (more specific)
+    local customQuests = pfDB["quests"]["enUS-turtle"]
+    if customQuests and customQuests[questId] then
+        local entry = customQuests[questId]
         if type(entry) == "table" and entry["T"] then
             return entry["T"]
         end
@@ -694,6 +732,12 @@ local function HookChatFrames()
                     end
                 end
 
+                -- Skip system messages, emotes, NPC speech
+                if currentIsSystemEvent and not WoWTranslateDB.translateSystemMessages then
+                    frameOriginalAddMessage(self, text, r, g, b, id, holdTime)
+                    return
+                end
+
                 -- Log original message for debugging
                 DebugLog("ORIGINAL MSG:", string.sub(text, 1, 150))
 
@@ -959,8 +1003,15 @@ local function HookedSendChatMessage(msg, chatType, language, channel)
             local reconstructed = ReconstructMessage(queued.segments, translation)
             DebugLog("Outgoing reconstructed:", reconstructed)
 
-            -- Build message with prefix
-            local prefix = WoWTranslateDB.outgoingPrefix or "[Translated by WoWTranslate]"
+            -- Build message with prefix (use pre-translated for default prefix)
+            local userPrefix = WoWTranslateDB.outgoingPrefix or DEFAULT_PREFIX
+            local prefix
+            if userPrefix == DEFAULT_PREFIX then
+                local targetLang = WoWTranslateDB.outgoingToLang or "zh"
+                prefix = TRANSLATED_PREFIXES[targetLang] or userPrefix
+            else
+                prefix = userPrefix
+            end
             local finalMsg = prefix .. " " .. reconstructed
 
             -- Truncate if over 255 bytes (WoW chat limit)
@@ -1387,34 +1438,36 @@ local function OnAddonLoaded()
     end
 
     if dllOk then
-        WoWTranslate_API.StartPolling()
+        WoWTranslate_API.FetchCredits()  -- Auto-starts polling via demand-based system
     end
 
     local glossaryCount = WoWTranslate_GetGlossaryCount()
     local cacheCount = WoWTranslate_CacheStats().entries
     local dllStatus = dllOk and "|cFF00FF00DLL OK|r" or "|cFFFFFF00DLL not loaded|r"
 
-    DEFAULT_CHAT_FRAME:AddMessage("|cFF00CCFFWoWTranslate|r v0.10 - " .. dllStatus .. " | /wt show")
+    DEFAULT_CHAT_FRAME:AddMessage("|cFF00CCFFWoWTranslate|r v0.12 - " .. dllStatus .. " | /wt show")
 end
 
 local function OnPlayerLogin()
     HookChatFrames()
 
-    -- Hook ChatFrame_OnEvent to detect incoming channel for filtering
+    -- Hook ChatFrame_OnEvent to detect incoming channel and system events
     local originalChatFrameOnEvent = ChatFrame_OnEvent
     ChatFrame_OnEvent = function(event)
         currentIncomingChannel = EVENT_TO_CHANNEL[event]
+        currentIsSystemEvent = SYSTEM_EVENTS[event] or false
         originalChatFrameOnEvent(event)
         currentIncomingChannel = nil
+        currentIsSystemEvent = false
     end
 
     if not WoWTranslate_API.IsAvailable() then
         WoWTranslate_API.CheckDLL()
         if WoWTranslate_API.IsAvailable() then
-            WoWTranslate_API.StartPolling()
             if WoWTranslateDB and WoWTranslateDB.apiKey and WoWTranslateDB.apiKey ~= "" then
                 WoWTranslate_API.SetKey(WoWTranslateDB.apiKey)
             end
+            WoWTranslate_API.FetchCredits()  -- Auto-starts polling via demand-based system
         end
     end
 

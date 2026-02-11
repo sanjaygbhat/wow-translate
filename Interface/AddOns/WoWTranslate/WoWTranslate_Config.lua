@@ -1,6 +1,6 @@
 -- WoWTranslate_Config.lua
 -- Configuration UI panel for WoWTranslate
--- v0.10: Updated for WoWTranslate API keys with credit display
+-- v0.12: Added player name protection toggle, FetchCredits on open
 
 -- ============================================================================
 -- LANGUAGES
@@ -92,7 +92,7 @@ end
 local configFrame = CreateFrame("Frame", "WoWTranslateConfigFrame", UIParent)
 configFrame:Hide()
 configFrame:SetWidth(420)
-configFrame:SetHeight(750)  -- Increased for incoming/outgoing channel toggles
+configFrame:SetHeight(780)  -- Increased for player name toggle
 configFrame:SetPoint("CENTER", 0, 0)
 configFrame:SetMovable(true)
 configFrame:EnableMouse(true)
@@ -294,21 +294,22 @@ local Y_CREDITS = -135
 
 local Y_IN_HEADER = -175
 local Y_IN_ENABLE = -205
-local Y_IN_LANG = -240
+local Y_IN_NAMES = -235
+local Y_IN_LANG = -270
 
-local Y_IN_CH_LABEL = -310
-local Y_IN_CH_ROW1 = -335
-local Y_IN_CH_ROW2 = -365
-local Y_IN_CH_ROW3 = -395
+local Y_IN_CH_LABEL = -340
+local Y_IN_CH_ROW1 = -365
+local Y_IN_CH_ROW2 = -395
+local Y_IN_CH_ROW3 = -425
 
-local Y_OUT_HEADER = -430
-local Y_OUT_ENABLE = -460
-local Y_OUT_LANG = -495
+local Y_OUT_HEADER = -460
+local Y_OUT_ENABLE = -490
+local Y_OUT_LANG = -525
 
-local Y_CH_LABEL = -565
-local Y_CH_ROW1 = -590
-local Y_CH_ROW2 = -620
-local Y_CH_ROW3 = -650
+local Y_CH_LABEL = -595
+local Y_CH_ROW1 = -620
+local Y_CH_ROW2 = -650
+local Y_CH_ROW3 = -680
 
 -- API Settings Section
 CreateHeader("API Settings", Y_API_HEADER)
@@ -404,6 +405,7 @@ configFrame.elements.savingsDisplay = savingsDisplay
 CreateHeader("Incoming Translation (Chat -> You)", Y_IN_HEADER)
 configFrame.elements.inEnabled = CreateCheckbox("Enable Incoming Translation", 25, Y_IN_ENABLE, "enabled", nil)
 configFrame.elements.afkDisable = CreateCheckbox("Disable while AFK", 250, Y_IN_ENABLE, "disableWhileAfk", nil)
+configFrame.elements.translateSystem = CreateCheckbox("Translate system/emotes", 25, Y_IN_NAMES, "translateSystemMessages", nil)
 configFrame.elements.inFrom = CreateLangSelector("From:", 25, Y_IN_LANG, "incomingFromLang")
 configFrame.elements.inTo = CreateLangSelector("To:", 210, Y_IN_LANG, "incomingToLang")
 
@@ -517,6 +519,7 @@ local function RefreshUI()
 
     if e.inEnabled then e.inEnabled:SetChecked(cfg.enabled) end
     if e.afkDisable then e.afkDisable:SetChecked(cfg.disableWhileAfk) end
+    if e.translateSystem then e.translateSystem:SetChecked(cfg.translateSystemMessages) end
     if e.outEnabled then e.outEnabled:SetChecked(cfg.outgoingEnabled) end
 
     if e.inFrom and e.inFrom.display then
@@ -596,6 +599,9 @@ end)
 function WoWTranslate_ShowConfig()
     LoadTempConfig()
     RefreshUI()
+    if WoWTranslate_API and WoWTranslate_API.FetchCredits then
+        WoWTranslate_API.FetchCredits()
+    end
     configFrame:Show()
 end
 

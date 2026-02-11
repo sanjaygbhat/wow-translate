@@ -1,7 +1,7 @@
 -- WoWTranslate_API.lua
 -- DLL communication via UnitXP interface
 -- Handles async translation requests and polling
--- v0.10: Added credit tracking for WoWTranslate API keys
+-- v0.12: Added demand-based polling, FetchCredits
 
 WoWTranslate_API = {}
 
@@ -10,6 +10,7 @@ local pendingRequests = {}
 local dllAvailable = false
 local requestCounter = 0
 local pollFrame = nil
+local activePendingCount = 0
 
 -- Credit tracking (updated from DLL responses)
 local creditsRemaining = -1  -- -1 = unknown
@@ -156,6 +157,59 @@ function WoWTranslate_API.GetCacheSavingsFormatted()
 end
 
 -- ============================================================================
+-- DEMAND-BASED POLLING HELPERS
+-- ============================================================================
+
+-- Called when a new request is queued
+local function OnRequestQueued()
+    activePendingCount = activePendingCount + 1
+    if not pollFrame then
+        WoWTranslate_API.StartPolling()
+    end
+end
+
+-- Called when a request completes or times out
+local function OnRequestCompleted()
+    activePendingCount = activePendingCount - 1
+    if activePendingCount <= 0 then
+        activePendingCount = 0
+        WoWTranslate_API.StopPolling()
+    end
+end
+
+-- ============================================================================
+-- CREDIT FETCH (prime credits on load)
+-- ============================================================================
+
+-- Send a lightweight en->en translation to prime the credits value
+function WoWTranslate_API.FetchCredits()
+    if not dllAvailable then return false end
+    if creditsRemaining >= 0 then return true end  -- Already known
+
+    requestCounter = requestCounter + 1
+    local requestId = "credits_" .. tostring(requestCounter)
+
+    pendingRequests[requestId] = {
+        callback = function(translation, err)
+            -- Discard translation; credits captured by poll handler
+        end,
+        text = "hello",
+        timestamp = GetTime()
+    }
+
+    local success = pcall(function()
+        UnitXP("WoWTranslate", "translate_async", requestId, "hello", "en", "en")
+    end)
+
+    if success then
+        OnRequestQueued()
+    else
+        pendingRequests[requestId] = nil
+    end
+    return true
+end
+
+-- ============================================================================
 -- API KEY MANAGEMENT
 -- ============================================================================
 
@@ -237,6 +291,7 @@ function WoWTranslate_API.Translate(text, callback)
         return false
     end
 
+    OnRequestQueued()
     return true, requestId
 end
 
@@ -302,6 +357,7 @@ local function PollTranslations()
             if requestId and pendingRequests[requestId] then
                 local req = pendingRequests[requestId]
                 pendingRequests[requestId] = nil
+                OnRequestCompleted()
 
                 if req.callback then
                     if err and err ~= "" then
@@ -329,6 +385,7 @@ local function PollTranslations()
     for id, req in pairs(pendingRequests) do
         if now - req.timestamp > REQUEST_TIMEOUT then
             pendingRequests[id] = nil
+            OnRequestCompleted()
             if req.callback then
                 req.callback(nil, "Request timed out")
             end
@@ -407,6 +464,7 @@ function WoWTranslate_API.TranslateOutgoing(text, callback)
         return false
     end
 
+    OnRequestQueued()
     return true, requestId
 end
 

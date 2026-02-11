@@ -2,12 +2,12 @@
 
 <p align="center">
   <strong>Real-time chat translation for World of Warcraft 1.12</strong><br>
-  Break the language barrier on multilingual private servers
+  Break the language barrier on multilingual WoW 1.12 servers
 </p>
 
 <p align="center">
   <img src="https://img.shields.io/badge/WoW-1.12-blue" alt="WoW 1.12">
-  <img src="https://img.shields.io/badge/version-0.11-green" alt="Version 0.11">
+  <img src="https://img.shields.io/badge/version-0.12-green" alt="Version 0.12">
   <img src="https://img.shields.io/github/license/sanjaygbhat/wow-translate" alt="License">
 </p>
 
@@ -155,5 +155,5 @@ MIT License
 ---
 
 <p align="center">
-  <sub>Made for the WoW 1.12 private server community</sub>
+  <sub>Made for the WoW 1.12 community</sub>
 </p>

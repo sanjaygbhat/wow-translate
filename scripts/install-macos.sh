@@ -1,6 +1,6 @@
 #!/bin/bash
-# WoWTranslate Installation Script for TurtleSilicon (macOS)
-# This script installs the addon and DLL to your Turtle WoW client
+# WoWTranslate Installation Script for macOS
+# This script installs the addon and DLL to your WoW 1.12 client
 
 set -e
 
@@ -11,7 +11,7 @@ YELLOW='\033[1;33m'
 NC='\033[0m' # No Color
 
 echo "============================================"
-echo "WoWTranslate Installer for TurtleSilicon"
+echo "WoWTranslate Installer"
 echo "============================================"
 echo ""
 
@@ -103,7 +103,7 @@ echo "Next steps:"
 echo "1. Get a Google Cloud Translation API key"
 echo "   https://console.cloud.google.com/apis/credentials"
 echo ""
-echo "2. Launch Turtle WoW via TurtleSilicon"
+echo "2. Launch WoW"
 echo ""
 echo "3. In-game, type:"
 echo "   /wt key YOUR_API_KEY"

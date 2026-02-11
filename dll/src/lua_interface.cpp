@@ -30,7 +30,7 @@ typedef int (__fastcall* LUA_GETTOP)(void* L);
 typedef int (__fastcall* LUA_ISNUMBER)(void* L, int index);
 typedef int (__fastcall* LUA_ISSTRING)(void* L, int index);
 
-// Memory addresses for Turtle WoW Lua functions (from working UnitXP_SP3)
+// Memory addresses for WoW 1.12 Lua functions (from working UnitXP_SP3)
 static auto p_GetContext = reinterpret_cast<GETCONTEXT>(0x7040D0);
 static auto p_lua_pushstring = reinterpret_cast<LUA_PUSHSTRING>(0x006F3890);
 static auto p_lua_pushboolean = reinterpret_cast<LUA_PUSHBOOLEAN>(0x006F39F0);
