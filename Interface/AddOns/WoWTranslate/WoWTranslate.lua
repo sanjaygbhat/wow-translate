@@ -1176,6 +1176,16 @@ SlashCmdList["WOWTRANSLATE"] = function(msg)
         WoWTranslateDB.enabled = false
         DEFAULT_CHAT_FRAME:AddMessage("|cFFFF0000[WoWTranslate] Disabled|r")
 
+    elseif cmd == "names" then
+        if arg == "on" then
+            WoWTranslateDB.nameTooltips = true
+        elseif arg == "off" then
+            WoWTranslateDB.nameTooltips = false
+        else
+            WoWTranslateDB.nameTooltips = not WoWTranslateDB.nameTooltips
+        end
+        DEFAULT_CHAT_FRAME:AddMessage("[WoWTranslate] Player-name tooltips: " .. (WoWTranslateDB.nameTooltips and "|cFF00FF00ON|r" or "|cFFFF0000OFF|r"))
+
     elseif cmd == "provider" then
         if arg and arg ~= "" then
             SetProvider(arg)
@@ -1503,6 +1513,7 @@ SlashCmdList["WOWTRANSLATE"] = function(msg)
         DEFAULT_CHAT_FRAME:AddMessage("  /wt show - Open configuration panel")
         DEFAULT_CHAT_FRAME:AddMessage("  /wt hide - Close configuration panel")
         DEFAULT_CHAT_FRAME:AddMessage("  /wt on|off - Enable/disable incoming translation")
+        DEFAULT_CHAT_FRAME:AddMessage("  /wt names on|off - Translate player names in tooltips")
         DEFAULT_CHAT_FRAME:AddMessage("  /wt provider google|openai|custom")
         DEFAULT_CHAT_FRAME:AddMessage("  /wt googlekey <key>  (/wt key is deprecated)")
         DEFAULT_CHAT_FRAME:AddMessage("  /wt openaikey <key> | /wt openaiendpoint <url> | /wt openaimodel <model>")

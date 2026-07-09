@@ -11,3 +11,4 @@ WoWTranslate_API.lua
 WoWTranslate_Config.lua
 WoWTranslate_Minimap.lua
 WoWTranslate.lua
+WoWTranslate_NameTooltip.lua
