@@ -11,4 +11,4 @@ WoWTranslate_API.lua
 WoWTranslate_Config.lua
 WoWTranslate_Minimap.lua
 WoWTranslate.lua
-# WoWTranslate_NameTooltip.lua — experimental, disabled pending validation
+WoWTranslate_NameTooltip.lua
