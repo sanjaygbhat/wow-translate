@@ -59,7 +59,10 @@ void ReplaceAll(string& value, const string& from, const string& to) {
 }
 
 string JsonTemplateEscape(const string& value) {
-    string dumped = json(value).dump();
+    // error_handler_t::replace: chat text can contain invalid UTF-8 (server
+    // truncates at 255 bytes mid-character; Turtle language-garbling). A bare
+    // dump() THROWS on it — on the worker thread that killed the process.
+    string dumped = json(value).dump(-1, ' ', false, json::error_handler_t::replace);
     if (dumped.length() >= 2 && dumped.front() == '"' && dumped.back() == '"') {
         return dumped.substr(1, dumped.length() - 2);
     }
@@ -537,7 +540,7 @@ string TranslationClient::GetProviderStatusJson() const {
     status["ready"] = initialized;
     status["endpoint"] = endpoint;
     status["lastHttpStatus"] = lastHttpStatus;
-    return status.dump();
+    return status.dump(-1, ' ', false, json::error_handler_t::replace);
 }
 
 string TranslationClient::GetLastError() const {
@@ -770,7 +773,7 @@ TranslationResult TranslationClient::TranslateWithGoogle(const string& text,
     body["format"] = "text";
 
     DWORD status = 0;
-    string response = HttpsJsonRequest(url, body.dump(), {}, status);
+    string response = HttpsJsonRequest(url, body.dump(-1, ' ', false, json::error_handler_t::replace), {}, status);
     if (response.empty() && status == 0) {
         result = GetLastError().empty() ? "network error" : GetLastError();
         return TranslationResult::NETWORK_ERROR;
@@ -850,7 +853,7 @@ TranslationResult TranslationClient::TranslateWithOpenAI(const string& text,
     headers.push_back({"Authorization", "Bearer " + apiKey});
 
     DWORD status = 0;
-    string response = HttpsJsonRequest(url, body.dump(), headers, status);
+    string response = HttpsJsonRequest(url, body.dump(-1, ' ', false, json::error_handler_t::replace), headers, status);
     if (response.empty() && status == 0) {
         result = GetLastError().empty() ? "network error" : GetLastError();
         return TranslationResult::NETWORK_ERROR;
@@ -1067,7 +1070,20 @@ void TranslationClient::WorkerThreadFunc() {
             string translation;
             string error;
 
-            TranslationResult tr = TranslateText(request.text, translation, request.sourceLang, request.targetLang);
+            // The worker thread must be exception-proof: an uncaught throw
+            // here is std::terminate -> the whole game process dies.
+            TranslationResult tr;
+            try {
+                tr = TranslateText(request.text, translation, request.sourceLang, request.targetLang);
+            } catch (const std::exception& e) {
+                tr = TranslationResult::API_ERROR;
+                translation = string("internal error: ") + e.what();
+                LOG_ERROR("Exception processing request " + request.requestId + ": " + e.what());
+            } catch (...) {
+                tr = TranslationResult::API_ERROR;
+                translation = "internal error: unknown exception";
+                LOG_ERROR("Unknown exception processing request " + request.requestId);
+            }
             if (tr != TranslationResult::SUCCESS) {
                 switch (tr) {
                     case TranslationResult::NETWORK_ERROR: error = translation.empty() ? "network error" : translation; break;

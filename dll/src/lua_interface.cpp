@@ -315,7 +315,7 @@ int __fastcall detoured_UnitXP(void* L) {
                         result["id"] = requestId;
                         result["translation"] = translation;
                         result["error"] = error;
-                        lua_pushstring(L, result.dump());
+                        lua_pushstring(L, result.dump(-1, ' ', false, nlohmann::json::error_handler_t::replace));
                         LOG_DEBUG("Poll returned: " + requestId);
                     } else {
                         lua_pushstring(L, "");
