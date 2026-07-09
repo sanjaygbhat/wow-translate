@@ -12,6 +12,7 @@
   <img src="https://img.shields.io/badge/server-not%20required-brightgreen" alt="No server required">
   <img src="https://img.shields.io/badge/providers-Google%20%7C%20OpenAI%20%7C%20Custom-informational" alt="Google, OpenAI-compatible, and custom providers">
   <img src="https://img.shields.io/badge/LibreTranslate-custom%20HTTPS-orange" alt="LibreTranslate through the custom HTTPS provider">
+  <a href="https://github.com/sponsors/sanjaygbhat"><img src="https://img.shields.io/badge/%E2%9D%A4%20Sponsor-ea4aaa?logo=githubsponsors&logoColor=white" alt="Sponsor sanjaygbhat on GitHub"></a>
 </p>
 
 ---
@@ -432,6 +433,15 @@ The Windows CI workflows build the 32-bit DLL on pushes and pull requests:
 - `.github/workflows/build.yml` builds the DLL and uploads DLL/full-addon artifacts.
 
 Both workflows use the Visual Studio 2022 Win32 CMake path and produce `WoWTranslate.dll` from `dll/build/bin/Release/WoWTranslate.dll`.
+
+---
+
+## ❤️ Support
+
+WoWTranslate is free and open source. If it makes your cross-language adventures better,
+you can support development through
+[GitHub Sponsors](https://github.com/sponsors/sanjaygbhat) — one-time or monthly, and 100%
+of personal sponsorships go to the developer.
 
 ---
 
