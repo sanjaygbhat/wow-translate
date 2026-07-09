@@ -11,6 +11,7 @@
   <img src="https://img.shields.io/github/license/sanjaygbhat/wow-translate" alt="License">
   <img src="https://img.shields.io/badge/server-not%20required-brightgreen" alt="No server required">
   <img src="https://img.shields.io/badge/providers-Google%20%7C%20OpenAI%20%7C%20Custom-informational" alt="Google, OpenAI-compatible, and custom providers">
+  <img src="https://img.shields.io/badge/LibreTranslate-custom%20HTTPS-orange" alt="LibreTranslate through the custom HTTPS provider">
 </p>
 
 ---
@@ -22,7 +23,7 @@ Version 2.0 is two local pieces:
 - A WoW 1.12 Lua addon in `Interface/AddOns/WoWTranslate`
 - A 32-bit Windows DLL, `WoWTranslate.dll`, loaded by the client through `dlls.txt`
 
-The DLL calls your configured translation provider directly over HTTPS from your local machine. Google Cloud Translation Basic v2 is the default provider, and each player supplies their own provider key locally.
+The DLL calls your configured translation provider directly over HTTPS from your local machine. Google Cloud Translation Basic v2 is the default provider, and each player supplies their own provider key or self-hosted HTTPS endpoint locally.
 
 ---
 
@@ -33,7 +34,8 @@ The DLL calls your configured translation provider directly over HTTPS from your
 | 🌍 **Incoming Translation** | Translate incoming chat with language and channel controls. |
 | 💬 **Optional Outgoing Translation** | Translate your own messages before they are sent. Off by default. |
 | 🔌 **Direct Providers** | Use Google Cloud Translation Basic v2, an OpenAI-compatible `/v1/chat/completions` endpoint, or a custom HTTPS JSON service. |
-| 🚫 **No Hosted Server** | WoWTranslate 2.0 calls providers directly from your machine; you bring a provider key from an account you control. |
+| 🆓 **Free LibreTranslate Path** | Use LibreTranslate through the custom HTTPS provider; self-host for a no-billing option. |
+| 🚫 **No Hosted Server** | WoWTranslate 2.0 calls providers directly from your machine; you bring a provider key or HTTPS endpoint you control. |
 | 📚 **WoW Glossary** | Preprocesses common raid, class, item, and server terms before provider translation. |
 | 🔗 **Hyperlink Safe** | Preserves item, quest, player, and other WoW hyperlinks so links stay clickable. |
 | ⚡ **Local Cache** | Repeated translations are served from a persistent local cache instead of calling the provider again. |
@@ -134,6 +136,14 @@ WoWTranslate does not sell keys or translation time. Your configured provider bi
 
 For Google Cloud Translation Basic v2, Google currently lists the first 500,000 characters per month as free, then roughly `$20` per million characters after that. Check the [Google Cloud Translation pricing page](https://cloud.google.com/translate/pricing) for current rates.
 
+Provider tradeoffs:
+
+| Provider | Best For | Cost and Billing | Setup |
+|----------|----------|------------------|-------|
+| **Google Cloud Translation Basic v2** | Best translation quality and language coverage. | Requires a linked Google Cloud billing account. The first 500,000 characters/month are currently free, then usage is paid. | `/wt provider google` plus a Google Cloud Translation API key. |
+| **OpenAI-compatible** | OpenAI or any service with an OpenAI-style chat completions API. | Requires an OpenAI-style API key. Billing depends on the provider account. | `/wt provider openai` plus endpoint, model, and key. |
+| **LibreTranslate (custom)** | Free, no-billing translation when you self-host. | Free and open-source. Self-host for reliability; public community mirrors can be rate-limited or unreliable. | `/wt provider custom` plus the LibreTranslate endpoint, template, and response path below. |
+
 Ways to keep cost under your control:
 
 - Set a daily quota cap for the Cloud Translation API.
@@ -141,6 +151,56 @@ Ways to keep cost under your control:
 - Leave outgoing translation off unless you need it.
 - Keep the local cache enabled so repeated messages do not call the provider again.
 - Glossary replacements and cache hits are local and do not call the provider.
+
+---
+
+## 🆓 Free Option (No Billing): LibreTranslate
+
+LibreTranslate is free and open-source. WoWTranslate uses it through the existing custom HTTPS JSON provider, so no code changes are needed. The endpoint must be HTTPS because `WoWTranslate.dll` only accepts HTTPS custom endpoints.
+
+### In-Game Slash Commands
+
+```text
+/wt provider custom
+/wt customendpoint https://YOUR-LIBRETRANSLATE-HOST/translate
+/wt customtemplate {"q":"{text}","source":"{source}","target":"{target}","format":"text"}
+/wt custompath translatedText
+/wt test 你好
+```
+
+### WoWTranslate.ini
+
+Place this in `WoWTranslate.ini` next to `WoWTranslate.dll`:
+
+```ini
+[provider]
+type=custom
+
+[custom]
+endpoint=https://YOUR-LIBRETRANSLATE-HOST/translate
+request_template={"q":"{text}","source":"{source}","target":"{target}","format":"text"}
+response_path=translatedText
+```
+
+### API Keys
+
+The official hosted `libretranslate.com` endpoint requires an API key. If any LibreTranslate instance needs a key, LibreTranslate expects it in the request body as `api_key`, not as an auth header. Add it inside the template:
+
+```ini
+request_template={"q":"{text}","source":"{source}","target":"{target}","format":"text","api_key":"YOUR_LT_KEY"}
+```
+
+Do not use `/wt customkey` or `/wt customauth` for LibreTranslate API keys.
+
+### Self-Hosting
+
+For a truly free, unlimited, reliable option, self-host LibreTranslate with Docker:
+
+```bash
+docker run -ti --rm -p 5000:5000 libretranslate/libretranslate
+```
+
+That starts LibreTranslate on local HTTP port `5000`. Put HTTPS in front of it with a reverse proxy or tunnel, then configure WoWTranslate with the public `https://.../translate` URL. Public community mirrors exist, but they are usually rate-limited and can be unreliable; self-hosting is the dependable free path.
 
 ---
 
