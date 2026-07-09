@@ -249,6 +249,25 @@ function WoWTranslate_API.ConfigureGoogle(apiKey)
     return ok, err
 end
 
+function WoWTranslate_API.ConfigureGoogleFree()
+    if not dllAvailable then
+        return false, "DLL not available"
+    end
+
+    local success, result = pcall(function()
+        return UnitXP("WoWTranslate", "configure_google_free")
+    end)
+
+    if not success then
+        lastError = tostring(result)
+        return false, lastError
+    end
+
+    local ok, err = ParseBridgeResult(result)
+    lastError = err
+    return ok, err
+end
+
 function WoWTranslate_API.ConfigureOpenAICompatible(endpoint, apiKey, model, temperature)
     if not dllAvailable then
         return false, "DLL not available"
@@ -303,6 +322,8 @@ function WoWTranslate_API.HasSavedProviderConfig(provider)
 
     if provider == "google" then
         return WoWTranslateDB.googleApiKey and WoWTranslateDB.googleApiKey ~= ""
+    elseif provider == "google_free" then
+        return true -- no configuration needed
     elseif provider == "openai" then
         return WoWTranslateDB.openaiApiKey and WoWTranslateDB.openaiApiKey ~= ""
     elseif provider == "custom" then
@@ -328,6 +349,8 @@ function WoWTranslate_API.ConfigureFromSaved(force)
 
     if provider == "google" then
         return WoWTranslate_API.ConfigureGoogle(WoWTranslateDB.googleApiKey or "")
+    elseif provider == "google_free" then
+        return WoWTranslate_API.ConfigureGoogleFree()
     elseif provider == "openai" then
         return WoWTranslate_API.ConfigureOpenAICompatible(
             WoWTranslateDB.openaiEndpoint or "https://api.openai.com/v1/chat/completions",

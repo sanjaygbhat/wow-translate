@@ -180,6 +180,12 @@ int __fastcall detoured_UnitXP(void* L) {
                     return 1;
                 }
 
+                if (subcmd == "configure_google_free") {
+                    bool ok = EnsureTranslator()->ConfigureGoogleFree();
+                    PushConfigureResult(L, ok, "failed to configure Google Free provider");
+                    return 1;
+                }
+
                 if (subcmd == "configure_google") {
                     if (lua_gettop(L) < 3) {
                         lua_pushstring(L, "error|Google API key required");

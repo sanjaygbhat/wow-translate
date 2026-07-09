@@ -9,7 +9,7 @@ local ADDON_DIR = arg and arg[1] or "Interface/AddOns/WoWTranslate"
 -- ===========================================================================
 -- Lua 5.0/5.1 compatibility shims (addon targets vanilla's Lua 5.0)
 -- ===========================================================================
-local unpack = unpack or table.unpack
+unpack = unpack or table.unpack  -- global: the addon's own 5.0 fallbacks use it
 table.getn = table.getn or function(t) return #t end
 table.setn = table.setn or function() end
 string.gfind = string.gfind or string.gmatch
@@ -187,6 +187,7 @@ function UnitXP(sentinel, cmd, a, b, c, d)
     if cmd == "provider_status" then return '{"provider":"google","configured":true,"ready":true,"endpoint":"mock"}' end
     if cmd == "last_error" then return "" end
     if cmd == "configure_google" then return "ok" end
+    if cmd == "configure_google_free" then G.__configuredFree = true; return "ok" end
     if cmd == "translate_async" then
         table.insert(dllQueue, { id = a, text = b })
         G.__tCalls = G.__tCalls or {}
@@ -413,6 +414,13 @@ G.__mockUnits = { mouseover = { name = CJK4 .. "NPC", player = false } }
 guard("tooltip:npc", function() GameTooltip:SetText(CJK4 .. "NPC") end)
 if markerLines() > 0 then fail("F: line added for NPC unit") end
 if SendChatMessage ~= G.__ORIG_SEND then fail("F: SendChatMessage was replaced — whisper safety violated") end
+
+-- G) provider switching: google_free (incl. alias), then back
+guard("slash:google_free", function() SlashCmdList["WOWTRANSLATE"]("provider free") end)
+if WoWTranslateDB.provider ~= "google_free" then fail("G: alias 'free' not normalized, got %s", tostring(WoWTranslateDB.provider)) end
+if not G.__configuredFree then fail("G: configure_google_free never reached the DLL bridge") end
+guard("slash:google", function() SlashCmdList["WOWTRANSLATE"]("provider google") end)
+if WoWTranslateDB.provider ~= "google" then fail("G: switch back to google failed") end
 
 -- ===========================================================================
 -- Verdict

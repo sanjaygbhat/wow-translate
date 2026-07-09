@@ -17,6 +17,7 @@ local LANGUAGES = {
 }
 
 local PROVIDERS = {
+    { code = "google_free", name = "Google Free (no key)" },
     { code = "google", name = "Google" },
     { code = "openai", name = "OpenAI-compatible" },
     { code = "custom", name = "Custom HTTP" },

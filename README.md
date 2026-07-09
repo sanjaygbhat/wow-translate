@@ -24,7 +24,9 @@ Version 2.0 is two local pieces:
 - A WoW 1.12 Lua addon in `Interface/AddOns/WoWTranslate`
 - A 32-bit Windows DLL, `WoWTranslate.dll`, loaded by the client through `dlls.txt`
 
-The DLL calls your configured translation provider directly over HTTPS from your local machine. Google Cloud Translation Basic v2 is the default provider, and each player supplies their own provider key or self-hosted HTTPS endpoint locally.
+The DLL calls your configured translation provider directly over HTTPS from your local machine. **It works out of the box with no API key** via Google's free translate endpoint (`google_free`, the default). For heavier use or guaranteed stability, switch to Google Cloud Translation Basic v2 with your own key (`/wt provider google`), an OpenAI-compatible endpoint, or any custom HTTPS provider.
+
+> **google_free vs google:** the free endpoint needs zero setup but is unofficial — Google rate-limits it (heavy chat may briefly show untranslated messages) and could change it anytime. The keyed `google` provider is the official API: ~500k characters/month free, then paid, and never throttled at chat volumes.
 
 ---
 
@@ -35,6 +37,7 @@ The DLL calls your configured translation provider directly over HTTPS from your
 | 🌍 **Incoming Translation** | Translate incoming chat with language and channel controls. |
 | 💬 **Optional Outgoing Translation** | Translate your own messages before they are sent. Off by default. |
 | 🔌 **Direct Providers** | Use Google Cloud Translation Basic v2, an OpenAI-compatible `/v1/chat/completions` endpoint, or a custom HTTPS JSON service. |
+| 🆓 **No-Key Default** | `google_free` uses Google's free translate endpoint — install and play, zero configuration. |
 | 🆓 **Free LibreTranslate Path** | Use LibreTranslate through the custom HTTPS provider; self-host for a no-billing option. |
 | 🚫 **No Hosted Server** | WoWTranslate 2.0 calls providers directly from your machine; you bring a provider key or HTTPS endpoint you control. |
 | 📚 **WoW Glossary** | Preprocesses common raid, class, item, and server terms before provider translation. |

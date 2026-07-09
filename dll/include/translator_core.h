@@ -20,7 +20,8 @@
 enum class TranslationProvider {
     GOOGLE = 0,
     OPENAI_COMPATIBLE = 1,
-    CUSTOM_HTTP = 2
+    CUSTOM_HTTP = 2,
+    GOOGLE_FREE = 3
 };
 
 // Translation result codes
@@ -125,9 +126,12 @@ private:
     std::string HttpsJsonRequest(const ParsedUrl& url,
                                  const std::string& postData,
                                  const std::vector<std::pair<std::string, std::string>>& headers,
-                                 DWORD& statusCode);
+                                 DWORD& statusCode,
+                                 bool useGet = false);
     TranslationResult TranslateWithGoogle(const std::string& text, std::string& result,
                                           const std::string& sourceLang, const std::string& targetLang);
+    TranslationResult TranslateWithGoogleFree(const std::string& text, std::string& result,
+                                              const std::string& sourceLang, const std::string& targetLang);
     TranslationResult TranslateWithOpenAI(const std::string& text, std::string& result,
                                           const std::string& sourceLang, const std::string& targetLang);
     TranslationResult TranslateWithCustom(const std::string& text, std::string& result,
@@ -145,6 +149,7 @@ public:
     ~TranslationClient();
 
     bool ConfigureGoogle(const std::string& googleApiKey);
+    bool ConfigureGoogleFree();
     bool ConfigureOpenAICompatible(const std::string& endpoint,
                                    const std::string& apiKey,
                                    const std::string& model,

@@ -81,7 +81,7 @@ local SYSTEM_EVENTS = {
 
 local defaults = {
     enabled = true,
-    provider = "google",
+    provider = "google_free",  -- works out of the box; users with a key switch to "google"
     googleApiKey = "",
     openaiEndpoint = "https://api.openai.com/v1/chat/completions",
     openaiApiKey = "",
@@ -1100,13 +1100,17 @@ end
 -- ============================================================================
 local PROVIDER_LABELS = {
     google = "Google Cloud Translation",
+    google_free = "Google Free (no key)",
     openai = "OpenAI-compatible",
     custom = "Custom HTTP",
 }
 
 local function NormalizeProvider(provider)
     provider = string.lower(provider or "")
-    if provider == "google" or provider == "openai" or provider == "custom" then
+    if provider == "free" or provider == "googlefree" or provider == "google-free" then
+        provider = "google_free"
+    end
+    if provider == "google" or provider == "google_free" or provider == "openai" or provider == "custom" then
         return provider
     end
     return nil
@@ -1142,7 +1146,7 @@ end
 local function SetProvider(provider)
     provider = NormalizeProvider(provider)
     if not provider then
-        DEFAULT_CHAT_FRAME:AddMessage("|cFFFF0000[WoWTranslate] Unknown provider. Use google, openai, or custom.|r")
+        DEFAULT_CHAT_FRAME:AddMessage("|cFFFF0000[WoWTranslate] Unknown provider. Use google_free, google, openai, or custom.|r")
         return
     end
 
@@ -1189,7 +1193,7 @@ SlashCmdList["WOWTRANSLATE"] = function(msg)
             SetProvider(arg)
         else
             DEFAULT_CHAT_FRAME:AddMessage("[WoWTranslate] Provider: " .. ProviderLabel(WoWTranslateDB.provider))
-            DEFAULT_CHAT_FRAME:AddMessage("  Usage: /wt provider google|openai|custom")
+            DEFAULT_CHAT_FRAME:AddMessage("  Usage: /wt provider google_free|google|openai|custom")
         end
 
     elseif cmd == "googlekey" and arg then
@@ -1512,7 +1516,7 @@ SlashCmdList["WOWTRANSLATE"] = function(msg)
         DEFAULT_CHAT_FRAME:AddMessage("  /wt hide - Close configuration panel")
         DEFAULT_CHAT_FRAME:AddMessage("  /wt on|off - Enable/disable incoming translation")
         DEFAULT_CHAT_FRAME:AddMessage("  /wt names on|off - Translate player names in tooltips")
-        DEFAULT_CHAT_FRAME:AddMessage("  /wt provider google|openai|custom")
+        DEFAULT_CHAT_FRAME:AddMessage("  /wt provider google_free|google|openai|custom")
         DEFAULT_CHAT_FRAME:AddMessage("  /wt googlekey <key>  (/wt key is deprecated)")
         DEFAULT_CHAT_FRAME:AddMessage("  /wt openaikey <key> | /wt openaiendpoint <url> | /wt openaimodel <model>")
         DEFAULT_CHAT_FRAME:AddMessage("  /wt customendpoint <url> | /wt customkey <key>")

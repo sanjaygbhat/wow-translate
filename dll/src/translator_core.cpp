@@ -22,6 +22,7 @@
 #pragma warning(push, 0)
 #endif
 #include "json.hpp"
+#include "gtx_parser.h"
 #ifdef _MSC_VER
 #pragma warning(pop)
 #endif
@@ -126,6 +127,7 @@ string ProviderName(TranslationProvider provider) {
         case TranslationProvider::GOOGLE: return "google";
         case TranslationProvider::OPENAI_COMPATIBLE: return "openai";
         case TranslationProvider::CUSTOM_HTTP: return "custom";
+        case TranslationProvider::GOOGLE_FREE: return "google_free";
         default: return "unknown";
     }
 }
@@ -320,6 +322,19 @@ bool TranslationClient::ConfigureGoogle(const string& apiKey) {
     return StartRuntime();
 }
 
+bool TranslationClient::ConfigureGoogleFree() {
+    Cleanup();
+
+    {
+        lock_guard<mutex> lock(configMutex);
+        provider = TranslationProvider::GOOGLE_FREE;
+        lastHttpStatus = 0;
+    }
+
+    LOG_INFO("Configuring Google Free provider (no API key)");
+    return StartRuntime();
+}
+
 bool TranslationClient::ConfigureOpenAICompatible(const string& endpoint,
                                                   const string& apiKey,
                                                   const string& model,
@@ -438,6 +453,10 @@ bool TranslationClient::LoadConfigFromIni() {
         return ConfigureGoogle(IniValue(ini, "google", "api_key"));
     }
 
+    if (type == "google_free" || type == "googlefree" || type == "free") {
+        return ConfigureGoogleFree();
+    }
+
     if (type == "openai" || type == "openai_compatible") {
         string tempText = IniValue(ini, "openai", "temperature", "0");
         double temperature = 0.0;
@@ -507,6 +526,9 @@ string TranslationClient::GetProviderEndpoint() const {
     if (provider == TranslationProvider::GOOGLE) {
         return "https://translation.googleapis.com/language/translate/v2";
     }
+    if (provider == TranslationProvider::GOOGLE_FREE) {
+        return "https://translate.googleapis.com/translate_a/single (free, no key)";
+    }
     if (provider == TranslationProvider::OPENAI_COMPATIBLE) {
         return MaskUrl(openaiEndpoint);
     }
@@ -519,6 +541,8 @@ string TranslationClient::GetProviderStatusJson() const {
     string endpoint;
     if (provider == TranslationProvider::GOOGLE) {
         endpoint = "https://translation.googleapis.com/language/translate/v2";
+    } else if (provider == TranslationProvider::GOOGLE_FREE) {
+        endpoint = "https://translate.googleapis.com/translate_a/single (free, no key)";
     } else if (provider == TranslationProvider::OPENAI_COMPATIBLE) {
         endpoint = MaskUrl(openaiEndpoint);
     } else {
@@ -528,6 +552,8 @@ string TranslationClient::GetProviderStatusJson() const {
     bool configured = false;
     if (provider == TranslationProvider::GOOGLE) {
         configured = !googleApiKey.empty();
+    } else if (provider == TranslationProvider::GOOGLE_FREE) {
+        configured = true;  // no key needed
     } else if (provider == TranslationProvider::OPENAI_COMPATIBLE) {
         configured = !openaiEndpoint.empty() && !openaiApiKey.empty() && !openaiModel.empty();
     } else {
@@ -631,7 +657,8 @@ TranslationClient::ParsedUrl TranslationClient::ParseUrl(const string& url) cons
 string TranslationClient::HttpsJsonRequest(const ParsedUrl& url,
                                            const string& postData,
                                            const vector<pair<string, string>>& headers,
-                                           DWORD& statusCode) {
+                                           DWORD& statusCode,
+                                           bool useGet) {
     statusCode = 0;
 
     if (!hSession || !url.valid) {
@@ -653,7 +680,7 @@ string TranslationClient::HttpsJsonRequest(const ParsedUrl& url,
 
     wstring wPath = ToWide(url.pathAndQuery);
     HINTERNET hRequest = WinHttpOpenRequest(hConnect,
-                                            L"POST",
+                                            useGet ? L"GET" : L"POST",
                                             wPath.c_str(),
                                             nullptr,
                                             WINHTTP_NO_REFERER,
@@ -668,7 +695,7 @@ string TranslationClient::HttpsJsonRequest(const ParsedUrl& url,
         return "";
     }
 
-    string headerText = "Content-Type: application/json\r\n";
+    string headerText = useGet ? "" : "Content-Type: application/json\r\n";
     headerText += "Accept: application/json\r\n";
     for (const auto& header : headers) {
         if (!header.first.empty() && !header.second.empty()) {
@@ -681,14 +708,14 @@ string TranslationClient::HttpsJsonRequest(const ParsedUrl& url,
         LOG_WARNING("WinHttpAddRequestHeaders failed");
     }
 
-    LOG_DEBUG("POST https://" + url.host + ":" + to_string(url.port) + MaskUrl(url.pathAndQuery));
+    LOG_DEBUG(string(useGet ? "GET" : "POST") + " https://" + url.host + ":" + to_string(url.port) + MaskUrl(url.pathAndQuery));
 
     BOOL sent = WinHttpSendRequest(hRequest,
                                    WINHTTP_NO_ADDITIONAL_HEADERS,
                                    0,
-                                   postData.empty() ? WINHTTP_NO_REQUEST_DATA : (LPVOID)postData.c_str(),
-                                   static_cast<DWORD>(postData.length()),
-                                   static_cast<DWORD>(postData.length()),
+                                   (useGet || postData.empty()) ? WINHTTP_NO_REQUEST_DATA : (LPVOID)postData.c_str(),
+                                   useGet ? 0 : static_cast<DWORD>(postData.length()),
+                                   useGet ? 0 : static_cast<DWORD>(postData.length()),
                                    0);
 
     string response;
@@ -803,6 +830,51 @@ TranslationResult TranslationClient::TranslateWithGoogle(const string& text,
         SetLastError(result);
         return TranslationResult::API_ERROR;
     }
+}
+
+TranslationResult TranslationClient::TranslateWithGoogleFree(const string& text,
+                                                             string& result,
+                                                             const string& sourceLang,
+                                                             const string& targetLang) {
+    string sl = (sourceLang.empty() || sourceLang == "auto") ? "auto" : sourceLang;
+
+    ParsedUrl url = ParseUrl("https://translate.googleapis.com/translate_a/single?client=gtx&dt=t&sl=" +
+                             UrlEncode(sl) + "&tl=" + UrlEncode(targetLang) + "&q=" + UrlEncode(text));
+
+    DWORD status = 0;
+    string response = HttpsJsonRequest(url, "", {}, status, true /* GET */);
+
+    if (status == 429) {
+        result = "rate limited by the free Google endpoint; wait a moment or switch to a keyed provider (/wt provider google)";
+        SetLastError(result);
+        LOG_WARNING("Google Free endpoint returned HTTP 429");
+        return TranslationResult::API_ERROR;
+    }
+
+    if (response.empty()) {
+        result = GetLastError().empty() ? "network error" : GetLastError();
+        return TranslationResult::NETWORK_ERROR;
+    }
+
+    if (status >= 400) {
+        result = "free endpoint HTTP " + to_string(status);
+        SetLastError(result);
+        LOG_ERROR("Google Free endpoint error: " + result);
+        return TranslationResult::API_ERROR;
+    }
+
+    string translated;
+    string parseError;
+    if (!ParseGtxResponse(response, translated, parseError)) {
+        result = parseError;
+        SetLastError(result);
+        LOG_ERROR("Google Free parse failure: " + parseError);
+        return TranslationResult::API_ERROR;
+    }
+
+    result = BasicHtmlDecode(translated);
+    SetLastError("");
+    return TranslationResult::SUCCESS;
 }
 
 TranslationResult TranslationClient::TranslateWithOpenAI(const string& text,
@@ -999,6 +1071,8 @@ TranslationResult TranslationClient::TranslateText(const string& text,
     TranslationResult tr = TranslationResult::API_ERROR;
     if (activeProvider == TranslationProvider::GOOGLE) {
         tr = TranslateWithGoogle(text, result, sourceLang, targetLang);
+    } else if (activeProvider == TranslationProvider::GOOGLE_FREE) {
+        tr = TranslateWithGoogleFree(text, result, sourceLang, targetLang);
     } else if (activeProvider == TranslationProvider::OPENAI_COMPATIBLE) {
         tr = TranslateWithOpenAI(text, result, sourceLang, targetLang);
     } else {
