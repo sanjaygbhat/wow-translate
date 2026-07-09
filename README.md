@@ -28,7 +28,17 @@ The DLL calls your configured translation provider directly over HTTPS from your
 
 **⭐ The author heavily recommends the Google API Key translation (`/wt provider google`) — it is near perfect and seamless.** Setup takes ~10 minutes ([guide below](#-get-a-google-api-key)), the free tier of ~500k characters/month covers normal play, and you get Google's best translation model with no rate limits.
 
-> **google_free vs google:** the free endpoint needs zero setup but is unofficial — Google rate-limits it (heavy chat may briefly show untranslated messages), could change it anytime, and serves an older translation model (side-by-side testing shows the keyed API handles gaming slang noticeably better: 拉仇恨 → "drawn aggro" vs the free endpoint's literal "drawn hatred"). The keyed `google` provider is the official API: ~500k characters/month free, then paid, never throttled at chat volumes, and higher quality.
+> **google_free vs google:** the free endpoint needs zero setup but is unofficial — Google rate-limits it (heavy chat may briefly show untranslated messages), could change it anytime, and serves an older translation model. The keyed `google` provider is the official API: ~500k characters/month free, then paid, never throttled at chat volumes, and noticeably better at gamer language.
+
+Real side-by-side outputs (same input, both providers, captured live):
+
+| Chinese chat | Google Free (`google_free`) | Google with Key (`google`) |
+|---|---|---|
+| 法师拉仇恨了，快撤！ | "The mage has drawn **hatred**, retreat quickly!" | "The mage has drawn **aggro**, retreat quickly!" |
+| 萨满快给我加血，我要死了哈哈 | "Shaman, please give me more **blood**, I'm going to die haha" | "Shaman, **heal me!** I'm dying, haha!" |
+| 副本掉落的紫装归需求优先 | "Purple equipment dropped from the dungeon **will be given priority**" | "Purple gear dropped in dungeons should be **prioritized for those in need**" |
+
+The keyed model knows *aggro*, *heals*, and need-before-greed loot rules; the free model translates word-by-word.
 
 ---
 
