@@ -258,16 +258,14 @@ end
 local itemCacheQueue = {}
 local itemCacheCounter = 0
 
--- Hidden tooltip for forcing item cache population
-local itemCacheTooltip = CreateFrame("GameTooltip", "WoWTranslateItemCacheTooltip", nil, "GameTooltipTemplate")
-itemCacheTooltip:SetOwner(WorldFrame, "ANCHOR_NONE")
-
--- Force item data to be requested from server using SetHyperlink
--- This is more reliable than just calling GetItemInfo()
+-- We deliberately NEVER query the server for uncached items.
+-- GameTooltip:SetHyperlink() on an item missing from the local WDB cache is
+-- a known hard-crash in the 1.12 client (worse with custom Turtle item IDs),
+-- and launchers like WoWSilicon/TurtleSilicon wipe the WDB on every start,
+-- so probing would fire for every item linked in chat. Uncached items simply
+-- keep their original link text; cached ones still get localized names.
 local function TriggerItemCache(itemId)
-    local itemString = "item:" .. itemId .. ":0:0:0"
-    itemCacheTooltip:SetHyperlink(itemString)
-    DebugLog("Triggered cache for item:", itemId)
+    DebugLog("Skipping cache trigger for uncached item (crash-safe):", itemId)
 end
 
 -- Extract all item IDs from a text string
@@ -1772,7 +1770,9 @@ end
 local itemCacheFrame = CreateFrame("Frame")
 local itemCacheElapsed = 0
 local ITEM_CACHE_POLL_INTERVAL = 0.05  -- Poll every 50ms
-local ITEM_CACHE_MAX_WAIT = 3.0        -- Max wait 3 seconds
+local ITEM_CACHE_MAX_WAIT = 0          -- No waiting: we never probe the server
+                                       -- (see TriggerItemCache), so uncached
+                                       -- items resolve on the next tick
 local ITEM_CACHE_RETRY_INTERVAL = 0.5  -- Retry triggering cache every 500ms
 
 itemCacheFrame:SetScript("OnUpdate", function()
