@@ -26,7 +26,7 @@ Version 2.0 is two local pieces:
 
 The DLL calls your configured translation provider directly over HTTPS from your local machine. **It works out of the box with no API key** via Google's free translate endpoint (`google_free`, the default). For heavier use or guaranteed stability, switch to Google Cloud Translation Basic v2 with your own key (`/wt provider google`), an OpenAI-compatible endpoint, or any custom HTTPS provider.
 
-> **google_free vs google:** the free endpoint needs zero setup but is unofficial — Google rate-limits it (heavy chat may briefly show untranslated messages) and could change it anytime. The keyed `google` provider is the official API: ~500k characters/month free, then paid, and never throttled at chat volumes.
+> **google_free vs google:** the free endpoint needs zero setup but is unofficial — Google rate-limits it (heavy chat may briefly show untranslated messages), could change it anytime, and serves an older translation model (side-by-side testing shows the keyed API handles gaming slang noticeably better: 拉仇恨 → "drawn aggro" vs the free endpoint's literal "drawn hatred"). The keyed `google` provider is the official API: ~500k characters/month free, then paid, never throttled at chat volumes, and higher quality.
 
 ---
 
