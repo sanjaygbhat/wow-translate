@@ -33,6 +33,13 @@ jobs:
       working-directory: dll/build
       run: cmake --build . --config Release
 
+    - name: Upload DLL
+      uses: actions/upload-artifact@v4
+      with:
+        name: WoWTranslate-dll
+        path: dll/build/bin/Release/WoWTranslate.dll
+        if-no-files-found: error
+
     - name: Create Release Package
       run: |
         mkdir WoWTranslate
@@ -44,7 +51,9 @@ jobs:
         echo 1. Copy WoWTranslate.dll to your WoW folder (next to WoW.exe)>> WoWTranslate\INSTALL.txt
         echo 2. Add "WoWTranslate.dll" to dlls.txt in your WoW folder>> WoWTranslate\INSTALL.txt
         echo 3. Copy the Interface folder to your WoW folder>> WoWTranslate\INSTALL.txt
-        echo 4. Launch WoW, then type: /wt key YOUR_API_KEY>> WoWTranslate\INSTALL.txt
+        echo 4. Launch WoW, then type: /wt provider google>> WoWTranslate\INSTALL.txt
+        echo 5. Type: /wt googlekey YOUR_GOOGLE_CLOUD_TRANSLATION_API_KEY>> WoWTranslate\INSTALL.txt
+        echo 6. Test with: /wt test YOUR_TEXT>> WoWTranslate\INSTALL.txt
         echo.>> WoWTranslate\INSTALL.txt
         echo For help: /wt show>> WoWTranslate\INSTALL.txt
       shell: cmd
@@ -56,17 +65,23 @@ jobs:
         path: WoWTranslate/
         if-no-files-found: error
 
-    - name: Create Release ZIP (on tag)
-      if: startsWith(github.ref, 'refs/tags/')
+    - name: Create Release ZIP
       run: |
-        Compress-Archive -Path WoWTranslate/* -DestinationPath WoWTranslate-${{ github.ref_name }}.zip
+        Compress-Archive -Path WoWTranslate/* -DestinationPath WoWTranslate-2.0-${{ github.run_number }}.zip
       shell: pwsh
+
+    - name: Upload Release ZIP
+      uses: actions/upload-artifact@v4
+      with:
+        name: WoWTranslate-release-zip
+        path: WoWTranslate-2.0-${{ github.run_number }}.zip
+        if-no-files-found: error
 
     - name: Publish Release (on tag)
       if: startsWith(github.ref, 'refs/tags/')
       uses: softprops/action-gh-release@v1
       with:
-        files: WoWTranslate-${{ github.ref_name }}.zip
+        files: WoWTranslate-2.0-${{ github.run_number }}.zip
         generate_release_notes: true
       env:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

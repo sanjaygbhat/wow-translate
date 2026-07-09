@@ -48,7 +48,7 @@ bool InitializeLogging() {
 
         // Write initialization message
         testFile << "\n" << string(60, '=') << "\n";
-        testFile << "WoWTranslate v0.1 initialized at " << GetCurrentTimestamp() << "\n";
+        testFile << "WoWTranslate v2.0 initialized at " << GetCurrentTimestamp() << "\n";
         testFile << string(60, '=') << "\n";
         testFile.close();
 

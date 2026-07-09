@@ -15,6 +15,7 @@ local DEBUG_MODE = false
 local addonLoaded = false
 local originalAddMessage = nil
 local playerIsAFK = false
+local migrationIgnoredOldKey = false
 
 local pendingMessages = {}
 local messageCounter = 0
@@ -80,7 +81,17 @@ local SYSTEM_EVENTS = {
 
 local defaults = {
     enabled = true,
-    apiKey = "",
+    provider = "google",
+    googleApiKey = "",
+    openaiEndpoint = "https://api.openai.com/v1/chat/completions",
+    openaiApiKey = "",
+    openaiModel = "gpt-4.1-mini",
+    customEndpoint = "",
+    customApiKey = "",
+    customAuthHeader = "Authorization",
+    customAuthScheme = "Bearer",
+    customRequestTemplate = "",
+    customResponsePath = "translation",
     debugMode = false,
     -- Outgoing translation settings
     outgoingEnabled = false,  -- Off by default
@@ -786,17 +797,23 @@ local function HookChatFrames()
                     return
                 end
 
-                -- Check if credits are exhausted FIRST - if so, pass through original text
-                -- This skips both cache and API to show untranslated text
-                if WoWTranslate_API and WoWTranslate_API.IsCreditsExhausted() then
-                    DebugLog("Credits exhausted, passing through original (no cache, no API)")
-                    WoWTranslate_API.ShowCreditWarningIfNeeded()
-                    frameOriginalAddMessage(self, text, r, g, b, id, holdTime)
-                    return
-                end
-
                 -- Build text to send to translation API
                 local textToTranslate = BuildTranslatableText(segments)
+
+                if WoWTranslate_CheckGlossary then
+                    local glossaryText, glossaryType = WoWTranslate_CheckGlossary(textToTranslate)
+                    if glossaryText then
+                        DebugLog("Glossary applied:", glossaryType)
+                        textToTranslate = glossaryText
+
+                        if not ContainsSourceLanguage(textToTranslate) then
+                            local finalText = ReconstructMessage(segments, textToTranslate)
+                            WoWTranslate_CacheSave(text, finalText)
+                            frameOriginalAddMessage(self, finalText, r, g, b, id, holdTime)
+                            return
+                        end
+                    end
+                end
 
                 DebugLog("To translate:", string.sub(textToTranslate, 1, 50))
 
@@ -853,16 +870,6 @@ local function HookChatFrames()
                                 pending.originalAddMessage(pending.frame, finalText, pending.r, pending.g, pending.b, pending.id, pending.holdTime)
                             else
                                 DebugLog("API error:", err)
-                                -- Check for credit-related errors and show warning
-                                if err and (string.find(err, "INSUFFICIENT_CREDITS") or string.find(err, "Insufficient credits")) then
-                                    if originalAddMessage then
-                                        originalAddMessage(DEFAULT_CHAT_FRAME, "|cFFFF0000[WoWTranslate] Out of credits! Contact the addon author to add more credits.|r")
-                                    end
-                                elseif err and (string.find(err, "INVALID_API_KEY") or string.find(err, "Invalid API key")) then
-                                    if originalAddMessage then
-                                        originalAddMessage(DEFAULT_CHAT_FRAME, "|cFFFF0000[WoWTranslate] Invalid API key! Check your key in /wt show|r")
-                                    end
-                                end
                                 pending.originalAddMessage(pending.frame, pending.originalText, pending.r, pending.g, pending.b, pending.id, pending.holdTime)
                             end
                         end
@@ -949,13 +956,6 @@ local function HookedSendChatMessage(msg, chatType, language, channel)
     -- Skip if DLL not available
     if not WoWTranslate_API or not WoWTranslate_API.IsAvailable() then
         DebugLog("DLL not available for outgoing translation")
-        return originalSendChatMessage(msg, chatType, language, channel)
-    end
-
-    -- Skip if credits are exhausted
-    if WoWTranslate_API.IsCreditsExhausted() then
-        DebugLog("Credits exhausted, sending original")
-        WoWTranslate_API.ShowCreditWarningIfNeeded()
         return originalSendChatMessage(msg, chatType, language, channel)
     end
 
@@ -1098,6 +1098,62 @@ function WoWTranslate_SetIncomingChannelEnabled(channel, enabled)
 end
 
 -- ============================================================================
+-- PROVIDER CONFIGURATION HELPERS
+-- ============================================================================
+local PROVIDER_LABELS = {
+    google = "Google Cloud Translation",
+    openai = "OpenAI-compatible",
+    custom = "Custom HTTP",
+}
+
+local function NormalizeProvider(provider)
+    provider = string.lower(provider or "")
+    if provider == "google" or provider == "openai" or provider == "custom" then
+        return provider
+    end
+    return nil
+end
+
+local function ProviderLabel(provider)
+    return PROVIDER_LABELS[provider or "google"] or tostring(provider)
+end
+
+function WoWTranslate_GetProviderLabel(provider)
+    return ProviderLabel(provider)
+end
+
+function WoWTranslate_ApplyProviderConfig(force)
+    if not WoWTranslate_API or not WoWTranslate_API.IsAvailable() then
+        return false, "DLL not available"
+    end
+    return WoWTranslate_API.ConfigureFromSaved(force)
+end
+
+local function ApplyProviderAndReport(force)
+    local ok, err = WoWTranslate_ApplyProviderConfig(force)
+    if ok and WoWTranslate_API and WoWTranslate_API.HasSavedProviderConfig and WoWTranslate_API.HasSavedProviderConfig(WoWTranslateDB.provider) then
+        DEFAULT_CHAT_FRAME:AddMessage("|cFF00FF00[WoWTranslate] Provider configured: " .. ProviderLabel(WoWTranslateDB.provider) .. "|r")
+    elseif ok then
+        DEFAULT_CHAT_FRAME:AddMessage("[WoWTranslate] Provider saved. Add credentials or use WoWTranslate.ini next to the DLL.")
+    else
+        DEFAULT_CHAT_FRAME:AddMessage("|cFFFF0000[WoWTranslate] Provider not configured: " .. (err or "unknown") .. "|r")
+    end
+    return ok, err
+end
+
+local function SetProvider(provider)
+    provider = NormalizeProvider(provider)
+    if not provider then
+        DEFAULT_CHAT_FRAME:AddMessage("|cFFFF0000[WoWTranslate] Unknown provider. Use google, openai, or custom.|r")
+        return
+    end
+
+    WoWTranslateDB.provider = provider
+    DEFAULT_CHAT_FRAME:AddMessage("[WoWTranslate] Provider set to " .. ProviderLabel(provider))
+    ApplyProviderAndReport(false)
+end
+
+-- ============================================================================
 -- SLASH COMMANDS
 -- ============================================================================
 SLASH_WOWTRANSLATE1 = "/wt"
@@ -1120,23 +1176,94 @@ SlashCmdList["WOWTRANSLATE"] = function(msg)
         WoWTranslateDB.enabled = false
         DEFAULT_CHAT_FRAME:AddMessage("|cFFFF0000[WoWTranslate] Disabled|r")
 
-    elseif cmd == "key" and arg then
-        WoWTranslateDB.apiKey = arg
-        local success, err = WoWTranslate_API.SetKey(arg)
-        if success then
-            DEFAULT_CHAT_FRAME:AddMessage("|cFF00FF00[WoWTranslate] API key set|r")
+    elseif cmd == "provider" then
+        if arg and arg ~= "" then
+            SetProvider(arg)
         else
-            DEFAULT_CHAT_FRAME:AddMessage("|cFFFF0000[WoWTranslate] Failed to set API key: " .. (err or "unknown") .. "|r")
+            DEFAULT_CHAT_FRAME:AddMessage("[WoWTranslate] Provider: " .. ProviderLabel(WoWTranslateDB.provider))
+            DEFAULT_CHAT_FRAME:AddMessage("  Usage: /wt provider google|openai|custom")
         end
+
+    elseif cmd == "googlekey" and arg then
+        WoWTranslateDB.provider = "google"
+        WoWTranslateDB.googleApiKey = arg
+        local success, err = WoWTranslate_API.ConfigureGoogle(arg)
+        if success then
+            DEFAULT_CHAT_FRAME:AddMessage("|cFF00FF00[WoWTranslate] Google API key set|r")
+        else
+            DEFAULT_CHAT_FRAME:AddMessage("|cFFFF0000[WoWTranslate] Failed to set Google key: " .. (err or "unknown") .. "|r")
+        end
+
+    elseif cmd == "key" and arg then
+        WoWTranslateDB.googleApiKey = arg
+        DEFAULT_CHAT_FRAME:AddMessage("|cFFFFFF00[WoWTranslate] /wt key is deprecated; use /wt googlekey.|r")
+        if WoWTranslateDB.provider == "google" then
+            local success, err = WoWTranslate_API.ConfigureGoogle(arg)
+            if success then
+                DEFAULT_CHAT_FRAME:AddMessage("|cFF00FF00[WoWTranslate] Google API key set|r")
+            else
+                DEFAULT_CHAT_FRAME:AddMessage("|cFFFF0000[WoWTranslate] Failed to set Google key: " .. (err or "unknown") .. "|r")
+            end
+        else
+            DEFAULT_CHAT_FRAME:AddMessage("[WoWTranslate] Google key saved. Active provider is still " .. ProviderLabel(WoWTranslateDB.provider) .. ".")
+        end
+
+    elseif cmd == "openaikey" and arg then
+        WoWTranslateDB.provider = "openai"
+        WoWTranslateDB.openaiApiKey = arg
+        ApplyProviderAndReport(true)
+
+    elseif cmd == "openaiendpoint" and arg then
+        WoWTranslateDB.provider = "openai"
+        WoWTranslateDB.openaiEndpoint = arg
+        ApplyProviderAndReport(false)
+
+    elseif cmd == "openaimodel" and arg then
+        WoWTranslateDB.provider = "openai"
+        WoWTranslateDB.openaiModel = arg
+        ApplyProviderAndReport(false)
+
+    elseif cmd == "customendpoint" and arg then
+        WoWTranslateDB.provider = "custom"
+        WoWTranslateDB.customEndpoint = arg
+        ApplyProviderAndReport(false)
+
+    elseif cmd == "customkey" and arg then
+        WoWTranslateDB.provider = "custom"
+        WoWTranslateDB.customApiKey = arg
+        ApplyProviderAndReport(false)
+
+    elseif cmd == "customauth" then
+        if arg and arg ~= "" then
+            local header, scheme = strsplit(" ", arg, 2)
+            WoWTranslateDB.provider = "custom"
+            WoWTranslateDB.customAuthHeader = header or "Authorization"
+            WoWTranslateDB.customAuthScheme = scheme or ""
+            ApplyProviderAndReport(false)
+        else
+            DEFAULT_CHAT_FRAME:AddMessage("[WoWTranslate] Usage: /wt customauth <header> <scheme>")
+        end
+
+    elseif cmd == "customtemplate" and arg then
+        WoWTranslateDB.provider = "custom"
+        WoWTranslateDB.customRequestTemplate = arg
+        ApplyProviderAndReport(false)
+
+    elseif cmd == "custompath" and arg then
+        WoWTranslateDB.provider = "custom"
+        WoWTranslateDB.customResponsePath = arg
+        ApplyProviderAndReport(false)
 
     elseif cmd == "status" then
         local dllStatus = WoWTranslate_API.IsAvailable()
             and "|cFF00FF00Connected|r"
             or "|cFFFF0000Not loaded|r"
 
+        local providerStatus = WoWTranslate_API.GetProviderStatus()
         local cacheStats = WoWTranslate_CacheStats()
         local glossaryCount = WoWTranslate_GetGlossaryCount()
         local pendingCount = WoWTranslate_API.GetPendingCount()
+        local lastProviderError = WoWTranslate_API.GetLastError()
 
         local queuedCount = 0
         for _ in pairs(pendingMessages) do
@@ -1156,22 +1283,27 @@ SlashCmdList["WOWTRANSLATE"] = function(msg)
             and "|cFF00FF00ACTIVE|r"
             or "|cFFFF0000INACTIVE|r"
 
-        -- Get credits info
-        local creditsStr = WoWTranslate_API.GetCreditsFormatted and WoWTranslate_API.GetCreditsFormatted() or "Unknown"
-        local creditsLow = WoWTranslate_API.IsCreditsLow and WoWTranslate_API.IsCreditsLow()
-        local creditsExhausted = WoWTranslate_API.IsCreditsExhausted and WoWTranslate_API.IsCreditsExhausted()
+        local configuredStatus = providerStatus.configured
+            and "|cFF00FF00yes|r"
+            or "|cFFFF0000no|r"
+        local readyStatus = providerStatus.ready
+            and "|cFF00FF00ready|r"
+            or "|cFFFF0000not ready|r"
 
         DEFAULT_CHAT_FRAME:AddMessage("[WoWTranslate] Status:")
         DEFAULT_CHAT_FRAME:AddMessage("  DLL: " .. dllStatus)
-        if creditsExhausted then
-            DEFAULT_CHAT_FRAME:AddMessage("  Credits: |cFFFF0000" .. creditsStr .. " (EXHAUSTED - translation disabled)|r")
-        elseif creditsLow then
-            DEFAULT_CHAT_FRAME:AddMessage("  Credits: |cFFFF0000" .. creditsStr .. " (LOW!)|r")
-        else
-            DEFAULT_CHAT_FRAME:AddMessage("  Credits: |cFF00FF00" .. creditsStr .. "|r")
+        DEFAULT_CHAT_FRAME:AddMessage("  Provider: " .. ProviderLabel(providerStatus.provider) .. " (" .. readyStatus .. ")")
+        DEFAULT_CHAT_FRAME:AddMessage("  Configured: " .. configuredStatus)
+        if providerStatus.endpoint and providerStatus.endpoint ~= "" then
+            DEFAULT_CHAT_FRAME:AddMessage("  Endpoint: " .. providerStatus.endpoint)
         end
-        DEFAULT_CHAT_FRAME:AddMessage("  Incoming (CN->EN): " .. (WoWTranslateDB.enabled and "|cFF00FF00ON|r" or "|cFFFF0000OFF|r"))
-        DEFAULT_CHAT_FRAME:AddMessage("  Outgoing (EN->CN): " .. outgoingStatus)
+        if lastProviderError and lastProviderError ~= "" then
+            DEFAULT_CHAT_FRAME:AddMessage("  Last error: |cFFFF0000" .. lastProviderError .. "|r")
+        else
+            DEFAULT_CHAT_FRAME:AddMessage("  Last error: none")
+        end
+        DEFAULT_CHAT_FRAME:AddMessage("  Incoming (" .. (WoWTranslateDB.incomingFromLang or "zh") .. "->" .. (WoWTranslateDB.incomingToLang or "en") .. "): " .. (WoWTranslateDB.enabled and "|cFF00FF00ON|r" or "|cFFFF0000OFF|r"))
+        DEFAULT_CHAT_FRAME:AddMessage("  Outgoing (" .. (WoWTranslateDB.outgoingFromLang or "en") .. "->" .. (WoWTranslateDB.outgoingToLang or "zh") .. "): " .. outgoingStatus)
         DEFAULT_CHAT_FRAME:AddMessage("  Outgoing Hook: " .. hookStatus)
         DEFAULT_CHAT_FRAME:AddMessage("  Glossary entries: " .. glossaryCount)
         DEFAULT_CHAT_FRAME:AddMessage("  Cached translations: " .. cacheStats.entries)
@@ -1371,7 +1503,12 @@ SlashCmdList["WOWTRANSLATE"] = function(msg)
         DEFAULT_CHAT_FRAME:AddMessage("  /wt show - Open configuration panel")
         DEFAULT_CHAT_FRAME:AddMessage("  /wt hide - Close configuration panel")
         DEFAULT_CHAT_FRAME:AddMessage("  /wt on|off - Enable/disable incoming translation")
-        DEFAULT_CHAT_FRAME:AddMessage("  /wt key <apikey> - Set API key")
+        DEFAULT_CHAT_FRAME:AddMessage("  /wt provider google|openai|custom")
+        DEFAULT_CHAT_FRAME:AddMessage("  /wt googlekey <key>  (/wt key is deprecated)")
+        DEFAULT_CHAT_FRAME:AddMessage("  /wt openaikey <key> | /wt openaiendpoint <url> | /wt openaimodel <model>")
+        DEFAULT_CHAT_FRAME:AddMessage("  /wt customendpoint <url> | /wt customkey <key>")
+        DEFAULT_CHAT_FRAME:AddMessage("  /wt customauth <header> <scheme> | /wt customtemplate <json> | /wt custompath <path>")
+        DEFAULT_CHAT_FRAME:AddMessage("  /wt test <text> - Test translation")
         DEFAULT_CHAT_FRAME:AddMessage("  /wt status - Show status")
         DEFAULT_CHAT_FRAME:AddMessage("  /wt clearcache - Clear cache")
         DEFAULT_CHAT_FRAME:AddMessage("  /wt debug - Toggle debug mode")
@@ -1393,6 +1530,21 @@ local function InitializeSettings()
         if WoWTranslateDB[key] == nil then
             WoWTranslateDB[key] = value
         end
+    end
+
+    -- Migration: old 1.x apiKey was ambiguous. Only migrate non-WT keys to Google.
+    if WoWTranslateDB.apiKey and WoWTranslateDB.apiKey ~= "" then
+        if string.find(WoWTranslateDB.apiKey, "^WT%-") then
+            migrationIgnoredOldKey = true
+        elseif (not WoWTranslateDB.googleApiKey or WoWTranslateDB.googleApiKey == "") then
+            WoWTranslateDB.googleApiKey = WoWTranslateDB.apiKey
+            WoWTranslateDB.provider = "google"
+        end
+        WoWTranslateDB.apiKey = nil
+    end
+
+    if not NormalizeProvider(WoWTranslateDB.provider) then
+        WoWTranslateDB.provider = "google"
     end
 
     -- Migration: fix old short prefix to new full prefix
@@ -1433,19 +1585,16 @@ local function OnAddonLoaded()
 
     local dllOk = WoWTranslate_API.CheckDLL()
 
-    if dllOk and WoWTranslateDB.apiKey and WoWTranslateDB.apiKey ~= "" then
-        WoWTranslate_API.SetKey(WoWTranslateDB.apiKey)
-    end
-
     if dllOk then
-        WoWTranslate_API.FetchCredits()  -- Auto-starts polling via demand-based system
+        WoWTranslate_API.ConfigureFromSaved(false)
     end
 
-    local glossaryCount = WoWTranslate_GetGlossaryCount()
-    local cacheCount = WoWTranslate_CacheStats().entries
     local dllStatus = dllOk and "|cFF00FF00DLL OK|r" or "|cFFFFFF00DLL not loaded|r"
 
-    DEFAULT_CHAT_FRAME:AddMessage("|cFF00CCFFWoWTranslate|r v0.12 - " .. dllStatus .. " | /wt show")
+    DEFAULT_CHAT_FRAME:AddMessage("|cFF00CCFFWoWTranslate|r v2.0 - " .. dllStatus .. " | /wt show")
+    if migrationIgnoredOldKey then
+        DEFAULT_CHAT_FRAME:AddMessage("|cFFFFFF00[WoWTranslate] Old WT-* keys are not used in 2.0. Configure your own Google or custom provider key.|r")
+    end
 end
 
 local function OnPlayerLogin()
@@ -1464,10 +1613,7 @@ local function OnPlayerLogin()
     if not WoWTranslate_API.IsAvailable() then
         WoWTranslate_API.CheckDLL()
         if WoWTranslate_API.IsAvailable() then
-            if WoWTranslateDB and WoWTranslateDB.apiKey and WoWTranslateDB.apiKey ~= "" then
-                WoWTranslate_API.SetKey(WoWTranslateDB.apiKey)
-            end
-            WoWTranslate_API.FetchCredits()  -- Auto-starts polling via demand-based system
+            WoWTranslate_API.ConfigureFromSaved(false)
         end
     end
 
@@ -1539,16 +1685,23 @@ local function ProcessItemCacheMessage(queued)
         return
     end
 
-    -- Check if credits are exhausted FIRST - if so, pass through original (no cache, no API)
-    if WoWTranslate_API and WoWTranslate_API.IsCreditsExhausted() then
-        DebugLog("Credits exhausted, passing through item message (no cache, no API)")
-        WoWTranslate_API.ShowCreditWarningIfNeeded()
-        queued.originalAddMessage(queued.frame, text, queued.r, queued.g, queued.b, queued.id, queued.holdTime)
-        return
-    end
-
     -- Build text to send to translation API
     local textToTranslate = BuildTranslatableText(segments)
+
+    if WoWTranslate_CheckGlossary then
+        local glossaryText, glossaryType = WoWTranslate_CheckGlossary(textToTranslate)
+        if glossaryText then
+            DebugLog("Glossary applied to item message:", glossaryType)
+            textToTranslate = glossaryText
+
+            if not ContainsSourceLanguage(textToTranslate) then
+                local finalText = ReconstructMessage(segments, textToTranslate)
+                WoWTranslate_CacheSave(text, finalText)
+                queued.originalAddMessage(queued.frame, finalText, queued.r, queued.g, queued.b, queued.id, queued.holdTime)
+                return
+            end
+        end
+    end
 
     -- Check cache first
     local cached, found = WoWTranslate_CacheGet(text)

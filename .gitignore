@@ -29,5 +29,9 @@ release/
 # Logs
 *.log
 
+# Local provider credentials
+WoWTranslate.ini
+*.local.ini
+
 # WoW SavedVariables (for testing)
 WTF/

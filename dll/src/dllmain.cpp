@@ -1,5 +1,5 @@
 // dllmain.cpp - Main DLL entry point for WoWTranslate
-// Chinese to English translation for WoW 1.12
+// Local translation provider bridge for WoW 1.12
 
 #include <windows.h>
 #include <string>
@@ -31,7 +31,7 @@ BOOL APIENTRY DllMain(HMODULE hModule, DWORD ul_reason_for_call, LPVOID lpReserv
         }
 
         LOG_INFO("WoWTranslate: DLL_PROCESS_ATTACH");
-        LOG_INFO("Initializing WoWTranslate library v0.1...");
+        LOG_INFO("Initializing WoWTranslate library v2.0...");
 
         // Initialize translation client
         g_translator = std::make_unique<TranslationClient>();
@@ -39,6 +39,10 @@ BOOL APIENTRY DllMain(HMODULE hModule, DWORD ul_reason_for_call, LPVOID lpReserv
             LOG_ERROR("Failed to create translation client");
             MessageBoxW(NULL, L"Failed to initialize translation system.", L"WoWTranslate", MB_OK | MB_ICONERROR);
             return FALSE;
+        }
+
+        if (g_translator->LoadConfigFromIni()) {
+            LOG_INFO("Loaded provider configuration from WoWTranslate.ini");
         }
 
         // Initialize Lua interface

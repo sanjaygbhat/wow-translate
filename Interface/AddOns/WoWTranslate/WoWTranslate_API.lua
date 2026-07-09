@@ -1,7 +1,7 @@
 -- WoWTranslate_API.lua
 -- DLL communication via UnitXP interface
--- Handles async translation requests and polling
--- v0.12: Added demand-based polling, FetchCredits
+-- Handles provider configuration, async translation requests, and polling.
+-- v2.0: Direct Google/OpenAI/custom provider support.
 
 WoWTranslate_API = {}
 
@@ -11,26 +11,19 @@ local dllAvailable = false
 local requestCounter = 0
 local pollFrame = nil
 local activePendingCount = 0
-
--- Credit tracking (updated from DLL responses)
-local creditsRemaining = -1  -- -1 = unknown
-local creditsExhausted = false  -- True when we know credits are zero
 local lastError = nil
-local lastCreditWarningTime = 0  -- For throttling credit warnings
 
--- Cache savings tracking (session-based)
+-- Session cache hit tracking for diagnostics only
 local sessionCacheHits = 0
 local sessionCacheChars = 0
-local COST_PER_CHAR = 0.003  -- $30 per million = 0.003 cents per char
 
 -- Constants
-local POLL_INTERVAL = 0.1  -- Poll every 100ms
-local REQUEST_TIMEOUT = 30 -- Timeout requests after 30 seconds
+local POLL_INTERVAL = 0.1
+local REQUEST_TIMEOUT = 30
 
 -- ============================================================================
 -- LUA 5.0 COMPATIBILITY
 -- ============================================================================
--- strsplit is not available in WoW 1.12, implement it
 local function strsplit(delimiter, text, limit)
     if not text then return nil end
     if not delimiter or delimiter == "" then return text end
@@ -54,11 +47,128 @@ local function strsplit(delimiter, text, limit)
     return unpack(result)
 end
 
+local function trim(text)
+    if not text then return "" end
+    text = string.gsub(text, "^%s+", "")
+    text = string.gsub(text, "%s+$", "")
+    return text
+end
+
+-- Minimal JSON string/value reader for the fixed DLL response shapes.
+local function JsonUnescape(value)
+    if not value then return "" end
+
+    local result = ""
+    local i = 1
+    while i <= string.len(value) do
+        local ch = string.sub(value, i, i)
+        if ch == "\\" and i < string.len(value) then
+            local nextCh = string.sub(value, i + 1, i + 1)
+            if nextCh == "\"" then result = result .. "\""
+            elseif nextCh == "\\" then result = result .. "\\"
+            elseif nextCh == "/" then result = result .. "/"
+            elseif nextCh == "n" then result = result .. "\n"
+            elseif nextCh == "r" then result = result .. "\r"
+            elseif nextCh == "t" then result = result .. "\t"
+            elseif nextCh == "b" then result = result .. "\b"
+            elseif nextCh == "f" then result = result .. "\f"
+            elseif nextCh == "u" and i + 5 <= string.len(value) then
+                -- DLL emits UTF-8 directly for normal text; keep uncommon escapes readable.
+                result = result .. "?"
+                i = i + 4
+            else
+                result = result .. nextCh
+            end
+            i = i + 2
+        else
+            result = result .. ch
+            i = i + 1
+        end
+    end
+
+    return result
+end
+
+local function JsonGetRaw(jsonText, key)
+    if not jsonText or not key then return nil end
+
+    local search = "\"" .. key .. "\""
+    local keyStart, keyEnd = string.find(jsonText, search, 1, true)
+    if not keyStart then return nil end
+
+    local colon = string.find(jsonText, ":", keyEnd + 1, true)
+    if not colon then return nil end
+
+    local start = colon + 1
+    while start <= string.len(jsonText) do
+        local ch = string.sub(jsonText, start, start)
+        if ch ~= " " and ch ~= "\t" and ch ~= "\n" and ch ~= "\r" then
+            break
+        end
+        start = start + 1
+    end
+
+    if string.sub(jsonText, start, start) == "\"" then
+        local pos = start + 1
+        while pos <= string.len(jsonText) do
+            local ch = string.sub(jsonText, pos, pos)
+            if ch == "\\" then
+                pos = pos + 2
+            elseif ch == "\"" then
+                return string.sub(jsonText, start + 1, pos - 1), true
+            else
+                pos = pos + 1
+            end
+        end
+        return nil
+    end
+
+    local finish = start
+    while finish <= string.len(jsonText) do
+        local ch = string.sub(jsonText, finish, finish)
+        if ch == "," or ch == "}" then
+            break
+        end
+        finish = finish + 1
+    end
+
+    return trim(string.sub(jsonText, start, finish - 1)), false
+end
+
+local function JsonGetString(jsonText, key)
+    local raw, quoted = JsonGetRaw(jsonText, key)
+    if raw == nil then return nil end
+    if quoted then
+        return JsonUnescape(raw)
+    end
+    if raw == "null" then return nil end
+    return raw
+end
+
+local function JsonGetBool(jsonText, key)
+    local raw = JsonGetRaw(jsonText, key)
+    return raw == "true"
+end
+
+local function JsonGetNumber(jsonText, key)
+    local raw = JsonGetRaw(jsonText, key)
+    if raw then return tonumber(raw) end
+    return nil
+end
+
+local function ParseBridgeResult(result)
+    if result == "ok" then
+        return true, nil
+    end
+    if result and string.find(result, "error|", 1, true) == 1 then
+        return false, string.sub(result, 7)
+    end
+    return true, nil
+end
+
 -- ============================================================================
 -- DLL STATUS FUNCTIONS
 -- ============================================================================
-
--- Check if DLL is loaded and responding
 function WoWTranslate_API.CheckDLL()
     if UnitXP then
         local success, result = pcall(function()
@@ -73,94 +183,192 @@ function WoWTranslate_API.CheckDLL()
     return false
 end
 
--- Get DLL status
 function WoWTranslate_API.IsAvailable()
     return dllAvailable
 end
 
--- ============================================================================
--- CREDIT TRACKING (v0.10+)
--- ============================================================================
-
--- Get remaining credits from last API response
--- Returns: credits (number, -1 if unknown), formatted string
-function WoWTranslate_API.GetCredits()
-    return creditsRemaining
-end
-
--- Get credits as formatted string (e.g., "$4.95" or "Unknown")
-function WoWTranslate_API.GetCreditsFormatted()
-    if creditsRemaining < 0 then
-        return "Unknown"
-    end
-    -- Convert cents to dollars
-    local dollars = creditsRemaining / 100
-    return string.format("$%.2f", dollars)
-end
-
--- Get last error message
 function WoWTranslate_API.GetLastError()
+    if dllAvailable and UnitXP then
+        local success, result = pcall(function()
+            return UnitXP("WoWTranslate", "last_error")
+        end)
+        if success and result and result ~= "" then
+            lastError = result
+        end
+    end
     return lastError
 end
 
--- Check if credits are low (less than $1.00 = 100 cents)
-function WoWTranslate_API.IsCreditsLow()
-    return creditsRemaining >= 0 and creditsRemaining < 100
-end
+function WoWTranslate_API.GetProviderStatus()
+    local status = {
+        provider = WoWTranslateDB and WoWTranslateDB.provider or "google",
+        configured = false,
+        ready = false,
+        endpoint = "",
+        lastHttpStatus = 0,
+    }
 
--- Check if credits are completely exhausted (translation should be skipped)
-function WoWTranslate_API.IsCreditsExhausted()
-    return creditsExhausted
-end
-
--- Show credit exhausted warning (throttled to once per 60 seconds)
--- Returns true if warning was shown, false if throttled
-function WoWTranslate_API.ShowCreditWarningIfNeeded()
-    local now = GetTime()
-    if now - lastCreditWarningTime >= 60 then
-        lastCreditWarningTime = now
-        if DEFAULT_CHAT_FRAME then
-            DEFAULT_CHAT_FRAME:AddMessage("|cFFFF0000[WoWTranslate] Out of credits! Translation disabled. Contact the addon author to add more credits.|r")
-        end
-        return true
+    if not dllAvailable or not UnitXP then
+        return status
     end
+
+    local success, result = pcall(function()
+        return UnitXP("WoWTranslate", "provider_status")
+    end)
+
+    if success and result and result ~= "" then
+        status.provider = JsonGetString(result, "provider") or status.provider
+        status.configured = JsonGetBool(result, "configured")
+        status.ready = JsonGetBool(result, "ready")
+        status.endpoint = JsonGetString(result, "endpoint") or ""
+        status.lastHttpStatus = JsonGetNumber(result, "lastHttpStatus") or 0
+    end
+
+    return status
+end
+
+-- ============================================================================
+-- PROVIDER CONFIGURATION
+-- ============================================================================
+function WoWTranslate_API.ConfigureGoogle(apiKey)
+    if not dllAvailable then
+        return false, "DLL not available"
+    end
+
+    local success, result = pcall(function()
+        return UnitXP("WoWTranslate", "configure_google", apiKey or "")
+    end)
+
+    if not success then
+        lastError = tostring(result)
+        return false, lastError
+    end
+
+    local ok, err = ParseBridgeResult(result)
+    lastError = err
+    return ok, err
+end
+
+function WoWTranslate_API.ConfigureOpenAICompatible(endpoint, apiKey, model, temperature)
+    if not dllAvailable then
+        return false, "DLL not available"
+    end
+
+    local success, result = pcall(function()
+        return UnitXP("WoWTranslate", "configure_openai",
+            endpoint or "https://api.openai.com/v1/chat/completions",
+            apiKey or "",
+            model or "gpt-4.1-mini",
+            tostring(temperature or 0))
+    end)
+
+    if not success then
+        lastError = tostring(result)
+        return false, lastError
+    end
+
+    local ok, err = ParseBridgeResult(result)
+    lastError = err
+    return ok, err
+end
+
+function WoWTranslate_API.ConfigureCustomHttp(endpoint, apiKey, authHeader, authScheme, requestTemplate, responsePath)
+    if not dllAvailable then
+        return false, "DLL not available"
+    end
+
+    local success, result = pcall(function()
+        return UnitXP("WoWTranslate", "configure_custom",
+            endpoint or "",
+            apiKey or "",
+            authHeader or "Authorization",
+            authScheme or "Bearer",
+            requestTemplate or "",
+            responsePath or "translation")
+    end)
+
+    if not success then
+        lastError = tostring(result)
+        return false, lastError
+    end
+
+    local ok, err = ParseBridgeResult(result)
+    lastError = err
+    return ok, err
+end
+
+function WoWTranslate_API.HasSavedProviderConfig(provider)
+    provider = provider or (WoWTranslateDB and WoWTranslateDB.provider) or "google"
+    if not WoWTranslateDB then return false end
+
+    if provider == "google" then
+        return WoWTranslateDB.googleApiKey and WoWTranslateDB.googleApiKey ~= ""
+    elseif provider == "openai" then
+        return WoWTranslateDB.openaiApiKey and WoWTranslateDB.openaiApiKey ~= ""
+    elseif provider == "custom" then
+        return WoWTranslateDB.customEndpoint and WoWTranslateDB.customEndpoint ~= ""
+    end
+
     return false
 end
 
--- Reset credit exhausted state (called when key changes or credits added)
-function WoWTranslate_API.ResetCreditState()
-    creditsExhausted = false
-    creditsRemaining = -1
-    lastError = nil
+function WoWTranslate_API.ConfigureFromSaved(force)
+    if not dllAvailable then
+        return false, "DLL not available"
+    end
+    if not WoWTranslateDB then
+        return false, "settings not loaded"
+    end
+
+    local provider = WoWTranslateDB.provider or "google"
+
+    if not force and not WoWTranslate_API.HasSavedProviderConfig(provider) then
+        return true, nil
+    end
+
+    if provider == "google" then
+        return WoWTranslate_API.ConfigureGoogle(WoWTranslateDB.googleApiKey or "")
+    elseif provider == "openai" then
+        return WoWTranslate_API.ConfigureOpenAICompatible(
+            WoWTranslateDB.openaiEndpoint or "https://api.openai.com/v1/chat/completions",
+            WoWTranslateDB.openaiApiKey or "",
+            WoWTranslateDB.openaiModel or "gpt-4.1-mini",
+            0)
+    elseif provider == "custom" then
+        return WoWTranslate_API.ConfigureCustomHttp(
+            WoWTranslateDB.customEndpoint or "",
+            WoWTranslateDB.customApiKey or "",
+            WoWTranslateDB.customAuthHeader or "Authorization",
+            WoWTranslateDB.customAuthScheme or "Bearer",
+            WoWTranslateDB.customRequestTemplate or "",
+            WoWTranslateDB.customResponsePath or "translation")
+    end
+
+    return false, "unknown provider: " .. tostring(provider)
 end
 
--- Track a cache hit (called when translation comes from local cache)
+-- ============================================================================
+-- CACHE DIAGNOSTICS
+-- ============================================================================
 function WoWTranslate_API.TrackCacheHit(charCount)
     sessionCacheHits = sessionCacheHits + 1
     sessionCacheChars = sessionCacheChars + (charCount or 0)
 end
 
--- Get cache savings for this session
-function WoWTranslate_API.GetCacheSavings()
-    local savingsCents = sessionCacheChars * COST_PER_CHAR
-    return sessionCacheHits, sessionCacheChars, savingsCents
+function WoWTranslate_API.GetSessionCacheStats()
+    return sessionCacheHits, sessionCacheChars
 end
 
--- Get cache savings as formatted string
-function WoWTranslate_API.GetCacheSavingsFormatted()
-    local hits, chars, cents = WoWTranslate_API.GetCacheSavings()
-    if hits == 0 then
-        return "No cache hits yet"
+function WoWTranslate_API.GetSessionCacheStatsFormatted()
+    if sessionCacheHits == 0 then
+        return "No session cache hits"
     end
-    local dollars = cents / 100
-    return string.format("%d hits, %d chars, $%.2f saved", hits, chars, dollars)
+    return tostring(sessionCacheHits) .. " hits, " .. tostring(sessionCacheChars) .. " chars"
 end
 
 -- ============================================================================
 -- DEMAND-BASED POLLING HELPERS
 -- ============================================================================
-
--- Called when a new request is queued
 local function OnRequestQueued()
     activePendingCount = activePendingCount + 1
     if not pollFrame then
@@ -168,7 +376,6 @@ local function OnRequestQueued()
     end
 end
 
--- Called when a request completes or times out
 local function OnRequestCompleted()
     activePendingCount = activePendingCount - 1
     if activePendingCount <= 0 then
@@ -178,116 +385,45 @@ local function OnRequestCompleted()
 end
 
 -- ============================================================================
--- CREDIT FETCH (prime credits on load)
--- ============================================================================
-
--- Send a lightweight en->en translation to prime the credits value
-function WoWTranslate_API.FetchCredits()
-    if not dllAvailable then return false end
-    if creditsRemaining >= 0 then return true end  -- Already known
-
-    requestCounter = requestCounter + 1
-    local requestId = "credits_" .. tostring(requestCounter)
-
-    pendingRequests[requestId] = {
-        callback = function(translation, err)
-            -- Discard translation; credits captured by poll handler
-        end,
-        text = "hello",
-        timestamp = GetTime()
-    }
-
-    local success = pcall(function()
-        UnitXP("WoWTranslate", "translate_async", requestId, "hello", "en", "en")
-    end)
-
-    if success then
-        OnRequestQueued()
-    else
-        pendingRequests[requestId] = nil
-    end
-    return true
-end
-
--- ============================================================================
--- API KEY MANAGEMENT
--- ============================================================================
-
--- Set the WoWTranslate API key in the DLL
-function WoWTranslate_API.SetKey(apiKey)
-    if not dllAvailable then
-        return false, "DLL not available"
-    end
-
-    -- Reset credit state when key changes
-    creditsRemaining = -1
-    creditsExhausted = false
-    lastError = nil
-    lastCreditWarningTime = 0
-
-    local success, result = pcall(function()
-        return UnitXP("WoWTranslate", "setkey", apiKey)
-    end)
-
-    if success then
-        -- DLL returns "ok" on success or "error|message" on failure
-        if result == "ok" then
-            return true
-        elseif result and string.find(result, "error|") then
-            local errorMsg = string.sub(result, 7) -- Remove "error|" prefix
-            return false, errorMsg
-        else
-            return true -- Assume success if no error prefix
-        end
-    else
-        return false, result
-    end
-end
-
--- ============================================================================
 -- TRANSLATION FUNCTIONS
 -- ============================================================================
-
--- Request an async translation
--- callback(translation, error) will be called when complete
 function WoWTranslate_API.Translate(text, callback)
     if not dllAvailable then
-        if callback then
-            callback(nil, "DLL not available")
-        end
+        if callback then callback(nil, "DLL not available") end
         return false
     end
 
     if not text or text == "" then
-        if callback then
-            callback(nil, "Empty text")
-        end
+        if callback then callback(nil, "Empty text") end
         return false
     end
 
-    -- Generate unique request ID
     requestCounter = requestCounter + 1
     local requestId = tostring(requestCounter)
 
-    -- Store pending request
     pendingRequests[requestId] = {
         callback = callback,
         text = text,
         timestamp = GetTime()
     }
 
-    -- Send request to DLL with configurable language direction
     local fromLang = WoWTranslateDB and WoWTranslateDB.incomingFromLang or "zh"
     local toLang = WoWTranslateDB and WoWTranslateDB.incomingToLang or "en"
-    local success, err = pcall(function()
-        UnitXP("WoWTranslate", "translate_async", requestId, text, fromLang, toLang)
+    local success, result = pcall(function()
+        return UnitXP("WoWTranslate", "translate_async", requestId, text, fromLang, toLang)
     end)
 
     if not success then
         pendingRequests[requestId] = nil
-        if callback then
-            callback(nil, "DLL call failed: " .. tostring(err))
-        end
+        if callback then callback(nil, "DLL call failed: " .. tostring(result)) end
+        return false
+    end
+
+    local ok, err = ParseBridgeResult(result)
+    if not ok then
+        pendingRequests[requestId] = nil
+        lastError = err
+        if callback then callback(nil, err) end
         return false
     end
 
@@ -298,8 +434,6 @@ end
 -- ============================================================================
 -- POLLING SYSTEM
 -- ============================================================================
-
--- Poll DLL for completed translations
 local function PollTranslations()
     if not dllAvailable then return end
 
@@ -308,84 +442,33 @@ local function PollTranslations()
     end)
 
     if success and result and result ~= "" then
-        -- Parse result format from proxy-enabled DLL:
-        -- Success: "requestId|translation|credits|"
-        -- Error: "requestId||error_message|credits"
-        -- Where credits is optional (may be empty)
+        local requestId = JsonGetString(result, "id")
+        local translation = JsonGetString(result, "translation") or ""
+        local err = JsonGetString(result, "error") or ""
 
-        local firstPipe = string.find(result, "|", 1, true)
-        if firstPipe then
-            local requestId = string.sub(result, 1, firstPipe - 1)
-            local remainder = string.sub(result, firstPipe + 1)
+        if requestId and pendingRequests[requestId] then
+            local req = pendingRequests[requestId]
+            pendingRequests[requestId] = nil
+            OnRequestCompleted()
 
-            -- Find all pipes in remainder
-            local pipes = {}
-            local searchPos = 1
-            while true do
-                local pos = string.find(remainder, "|", searchPos, true)
-                if pos then
-                    table.insert(pipes, pos)
-                    searchPos = pos + 1
+            if req.callback then
+                if err ~= "" then
+                    lastError = err
+                    req.callback(nil, err)
                 else
-                    break
-                end
-            end
-
-            local translation, err, credits
-
-            if table.getn(pipes) >= 2 then
-                -- Format: translation|error|credits
-                translation = string.sub(remainder, 1, pipes[1] - 1)
-                err = string.sub(remainder, pipes[1] + 1, pipes[2] - 1)
-                local creditsStr = string.sub(remainder, pipes[2] + 1)
-                credits = tonumber(creditsStr)
-            elseif table.getn(pipes) == 1 then
-                -- Old format: translation|error
-                translation = string.sub(remainder, 1, pipes[1] - 1)
-                err = string.sub(remainder, pipes[1] + 1)
-            else
-                translation = remainder
-                err = ""
-            end
-
-            -- Update credits if we got a value
-            if credits and credits >= 0 then
-                creditsRemaining = credits
-                creditsExhausted = (credits == 0)
-            end
-
-            if requestId and pendingRequests[requestId] then
-                local req = pendingRequests[requestId]
-                pendingRequests[requestId] = nil
-                OnRequestCompleted()
-
-                if req.callback then
-                    if err and err ~= "" then
-                        -- Store error for UI
-                        lastError = err
-
-                        -- Check for credit exhaustion
-                        if string.find(err, "INSUFFICIENT_CREDITS") or string.find(err, "Insufficient credits") then
-                            creditsExhausted = true
-                            creditsRemaining = 0
-                        end
-
-                        req.callback(nil, err)
-                    else
-                        lastError = nil
-                        req.callback(translation, nil)
-                    end
+                    lastError = nil
+                    req.callback(translation, nil)
                 end
             end
         end
     end
 
-    -- Cleanup timed-out requests
     local now = GetTime()
     for id, req in pairs(pendingRequests) do
         if now - req.timestamp > REQUEST_TIMEOUT then
             pendingRequests[id] = nil
             OnRequestCompleted()
+            lastError = "Request timed out"
             if req.callback then
                 req.callback(nil, "Request timed out")
             end
@@ -393,7 +476,6 @@ local function PollTranslations()
     end
 end
 
--- Start the polling frame
 function WoWTranslate_API.StartPolling()
     if pollFrame then return end
 
@@ -409,7 +491,6 @@ function WoWTranslate_API.StartPolling()
     end)
 end
 
--- Stop the polling frame
 function WoWTranslate_API.StopPolling()
     if pollFrame then
         pollFrame:SetScript("OnUpdate", nil)
@@ -418,49 +499,45 @@ function WoWTranslate_API.StopPolling()
 end
 
 -- ============================================================================
--- OUTGOING TRANSLATION (English -> Chinese)
+-- OUTGOING TRANSLATION
 -- ============================================================================
-
--- Request an async outgoing translation (en -> zh)
--- callback(translation, error) will be called when complete
 function WoWTranslate_API.TranslateOutgoing(text, callback)
     if not dllAvailable then
-        if callback then
-            callback(nil, "DLL not available")
-        end
+        if callback then callback(nil, "DLL not available") end
         return false
     end
 
     if not text or text == "" then
-        if callback then
-            callback(nil, "Empty text")
-        end
+        if callback then callback(nil, "Empty text") end
         return false
     end
 
-    -- Generate unique request ID with "out_" prefix to distinguish from incoming
     requestCounter = requestCounter + 1
     local requestId = "out_" .. tostring(requestCounter)
 
-    -- Store pending request
     pendingRequests[requestId] = {
         callback = callback,
         text = text,
         timestamp = GetTime()
     }
 
-    -- Send request to DLL with configurable language direction
     local fromLang = WoWTranslateDB and WoWTranslateDB.outgoingFromLang or "en"
     local toLang = WoWTranslateDB and WoWTranslateDB.outgoingToLang or "zh"
-    local success, err = pcall(function()
-        UnitXP("WoWTranslate", "translate_async", requestId, text, fromLang, toLang)
+    local success, result = pcall(function()
+        return UnitXP("WoWTranslate", "translate_async", requestId, text, fromLang, toLang)
     end)
 
     if not success then
         pendingRequests[requestId] = nil
-        if callback then
-            callback(nil, "DLL call failed: " .. tostring(err))
-        end
+        if callback then callback(nil, "DLL call failed: " .. tostring(result)) end
+        return false
+    end
+
+    local ok, err = ParseBridgeResult(result)
+    if not ok then
+        pendingRequests[requestId] = nil
+        lastError = err
+        if callback then callback(nil, err) end
         return false
     end
 
@@ -471,8 +548,6 @@ end
 -- ============================================================================
 -- DEBUG FUNCTIONS
 -- ============================================================================
-
--- Get pending request count
 function WoWTranslate_API.GetPendingCount()
     local count = 0
     for _ in pairs(pendingRequests) do
@@ -481,7 +556,6 @@ function WoWTranslate_API.GetPendingCount()
     return count
 end
 
--- Get all pending request info (for debugging)
 function WoWTranslate_API.GetPendingRequests()
     local info = {}
     local now = GetTime()
@@ -494,4 +568,3 @@ function WoWTranslate_API.GetPendingRequests()
     end
     return info
 end
-

@@ -62,6 +62,8 @@ echo Installation:
 echo 1. Copy WoWTranslate.dll to your WoW folder (next to WoW.exe)
 echo 2. Add "WoWTranslate.dll" to dlls.txt
 echo 3. Copy WoWTranslate addon folder to Interface\AddOns\
+echo 4. In-game, run: /wt provider google
+echo 5. Then run: /wt googlekey YOUR_GOOGLE_CLOUD_TRANSLATION_API_KEY
 echo.
 
 cd ..

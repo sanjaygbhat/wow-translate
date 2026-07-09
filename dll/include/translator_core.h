@@ -1,5 +1,9 @@
 #pragma once
 
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+
 #include <windows.h>
 #include <winhttp.h>
 #include <string>
@@ -9,11 +13,14 @@
 #include <mutex>
 #include <thread>
 #include <atomic>
+#include <vector>
+#include <utility>
 
 // Translation provider mode
 enum class TranslationProvider {
-    PROXY = 0,          // WoWTranslate proxy server (default)
-    GOOGLE_DIRECT = 1   // Direct Google Translate API (user's own key)
+    GOOGLE = 0,
+    OPENAI_COMPATIBLE = 1,
+    CUSTOM_HTTP = 2
 };
 
 // Translation result codes
@@ -67,17 +74,29 @@ struct CacheEntry {
 class TranslationClient {
 private:
     HINTERNET hSession;
-    HINTERNET hConnect;
-    std::string apiKey;
     std::unordered_map<std::string, CacheEntry> cache;
     bool initialized;
 
-    // Server configuration
-    std::string serverHost;
-    int serverPort;
-
     // Provider mode
     TranslationProvider provider;
+    mutable std::mutex configMutex;
+
+    std::string googleApiKey;
+
+    std::string openaiEndpoint;
+    std::string openaiApiKey;
+    std::string openaiModel;
+    double openaiTemperature;
+
+    std::string customEndpoint;
+    std::string customApiKey;
+    std::string customAuthHeader;
+    std::string customAuthScheme;
+    std::string customRequestTemplate;
+    std::string customResponsePath;
+
+    std::string lastError;
+    DWORD lastHttpStatus;
 
     // Async translation support
     std::queue<AsyncRequest> requestQueue;
@@ -87,18 +106,36 @@ private:
     std::thread workerThread;
     std::atomic<bool> running;
 
-    // Credits tracking (from server response)
-    double creditsRemaining;
-
     static const DWORD CACHE_EXPIRY_MS = 3600000; // 1 hour (DLL cache)
     static const size_t MAX_CACHE_SIZE = 500;
 
+    struct ParsedUrl {
+        bool valid;
+        std::string scheme;
+        std::string host;
+        int port;
+        std::string pathAndQuery;
+
+        ParsedUrl() : valid(false), port(443), pathAndQuery("/") {}
+    };
+
     // Helper methods
     std::string UrlEncode(const std::string& text);
-    std::string HttpsRequest(const std::string& host, const std::string& path, const std::string& postData);
-    std::string ParseTranslationResponse(const std::string& jsonResponse);
-    std::string GenerateCacheKey(const std::string& text, const std::string& sourceLang, const std::string& targetLang);
+    ParsedUrl ParseUrl(const std::string& url) const;
+    std::string HttpsJsonRequest(const ParsedUrl& url,
+                                 const std::string& postData,
+                                 const std::vector<std::pair<std::string, std::string>>& headers,
+                                 DWORD& statusCode);
+    TranslationResult TranslateWithGoogle(const std::string& text, std::string& result,
+                                          const std::string& sourceLang, const std::string& targetLang);
+    TranslationResult TranslateWithOpenAI(const std::string& text, std::string& result,
+                                          const std::string& sourceLang, const std::string& targetLang);
+    TranslationResult TranslateWithCustom(const std::string& text, std::string& result,
+                                          const std::string& sourceLang, const std::string& targetLang);
     void CleanExpiredCache();
+    bool StartRuntime();
+    void SetLastError(const std::string& error);
+    void SetLastHttpStatus(DWORD status);
 
     // Worker thread function
     void WorkerThreadFunc();
@@ -107,19 +144,28 @@ public:
     TranslationClient();
     ~TranslationClient();
 
-    bool Initialize(const std::string& key);
-    bool InitializeGoogleDirect(const std::string& googleApiKey);
+    bool ConfigureGoogle(const std::string& googleApiKey);
+    bool ConfigureOpenAICompatible(const std::string& endpoint,
+                                   const std::string& apiKey,
+                                   const std::string& model,
+                                   double temperature = 0.0);
+    bool ConfigureCustomHttp(const std::string& endpoint,
+                             const std::string& apiKey,
+                             const std::string& authHeader,
+                             const std::string& authScheme,
+                             const std::string& requestTemplate,
+                             const std::string& responsePath);
+    bool LoadConfigFromIni();
     void Cleanup();
     bool IsInitialized() const { return initialized; }
 
-    // Server info
-    std::string GetServerInfo() const;
-
     // Provider
     TranslationProvider GetProvider() const { return provider; }
-
-    // Credits tracking
-    double GetCreditsRemaining() const { return creditsRemaining; }
+    std::string GetProviderName() const;
+    std::string GetProviderEndpoint() const;
+    std::string GetProviderStatusJson() const;
+    std::string GetLastError() const;
+    DWORD GetLastHttpStatus() const { return lastHttpStatus; }
 
     // Synchronous translation with configurable language direction
     TranslationResult TranslateText(const std::string& text, std::string& result,

@@ -1,159 +1,224 @@
-# WoWTranslate
+# WoWTranslate 2.0
 
-<p align="center">
-  <strong>Real-time chat translation for World of Warcraft 1.12</strong><br>
-  Break the language barrier on multilingual WoW 1.12 servers
-</p>
+Real-time chat translation for World of Warcraft 1.12 clients, including Turtle/CapyCraft 1.18.1-style installs.
 
-<p align="center">
-  <img src="https://img.shields.io/badge/WoW-1.12-blue" alt="WoW 1.12">
-  <img src="https://img.shields.io/badge/version-0.12-green" alt="Version 0.12">
-  <img src="https://img.shields.io/github/license/sanjaygbhat/wow-translate" alt="License">
-</p>
+WoWTranslate is two parts:
 
----
+- A WoW 1.12 Lua addon in `Interface/AddOns/WoWTranslate`
+- A 32-bit Windows DLL, `WoWTranslate.dll`, loaded by the client through `dlls.txt`
 
-## ✨ Features
+Version 2.0 does not use a WoWTranslate-hosted server. The DLL calls your configured translation provider directly over HTTPS from your local machine. Google Cloud Translation Basic v2 is the default provider, and each player supplies their own Google API key locally.
 
-| Feature | Description |
-|---------|-------------|
-| 🌍 **Multi-Language** | Chinese, Japanese, Korean, Russian → English (and reverse) |
-| 📚 **WoW Glossary** | 500+ gaming terms translated correctly ("老克" → "Kel'Thuzad", not "Old gram") |
-| ⚡ **Instant Cache** | Previously seen translations are instant and free |
-| 💬 **Outgoing Translation** | Type in English, send in Chinese (or other languages) |
-| 🔗 **Hyperlink Safe** | Player names, items, and quests stay clickable |
-| 🗺️ **Minimap Button** | One-click access to settings, draggable around the minimap |
-| 📺 **Channel Filtering** | Choose exactly which channels get translated |
-| 💤 **AFK Auto-Pause** | Saves credits by pausing translation while you're AFK |
+## Features
 
----
+- Incoming chat translation with channel filters
+- Optional outgoing translation before sending chat
+- Google Cloud Translation Basic v2 by default
+- OpenAI-compatible `/v1/chat/completions` provider support
+- Generic HTTPS JSON provider support
+- Local persistent translation cache
+- WoW glossary preprocessing for common raid, class, item, and server terms
+- Item and quest hyperlink preservation
+- Optional `WoWTranslate.ini` next to the DLL so keys do not need to be typed in chat
 
-## 🚀 Quick Start
+## Install
 
-### 1. Download
+Download the latest release package from GitHub Releases, then copy the files into your WoW folder:
 
-**[⬇️ Download Latest Release](../../releases/latest)**
-
-The download includes everything: DLL + Addon in one package.
-
-### 2. Install
-
-Extract and copy to your WoW folder:
-
-```
+```text
 YourWoWFolder/
-├── WoW.exe
-├── WoWTranslate.dll        ← From the download
-├── dlls.txt                ← Add "WoWTranslate.dll" to this file
-└── Interface/
-    └── AddOns/
-        └── WoWTranslate/   ← From the download
+  WoW.exe
+  WoWTranslate.dll
+  dlls.txt
+  Interface/
+    AddOns/
+      WoWTranslate/
 ```
 
-> **Note:** If `dlls.txt` doesn't exist, create it and add `WoWTranslate.dll` on the first line.
+If `dlls.txt` does not exist, create it next to `WoW.exe` and put this line in it:
 
-### 3. Get API Key
-
-API keys are distributed by the addon author. Each key comes with credits for translation.
-
-### 4. Configure In-Game
-
-```
-/wt key WT-XXXX-XXXX        Set your API key
+```text
+WoWTranslate.dll
 ```
 
-**Done!** A minimap button (scroll icon) appears — click it to open settings. Chat messages will now appear translated.
-
----
-
-## 📖 Commands
-
-| Command | Description |
-|---------|-------------|
-| `/wt show` | Open configuration panel |
-| `/wt on` / `/wt off` | Enable/disable translation |
-| `/wt key <key>` | Set your API key |
-| `/wt status` | Show status and credits |
-| `/wt test 你好` | Test translation |
-| `/wt outgoing on` | Enable outgoing translation |
-| `/wt clearcache` | Clear translation cache |
-
----
-
-## 💰 Pricing
-
-| Rate | Details |
-|------|---------|
-| **$30 / million characters** | ~0.003¢ per character |
-| **Cache hits are FREE** | Repeated messages cost nothing |
-| **Typical usage** | $1-3/month for active players |
-
-Check your balance anytime with `/wt status` or `/wt show`.
-
----
-
-## 🔧 How It Works
-
-```
-┌─────────────┐    ┌─────────────┐    ┌─────────────┐
-│  Glossary   │ →  │    Cache    │ →  │  Translate  │
-│  (instant)  │    │   (free)    │    │  (credits)  │
-└─────────────┘    └─────────────┘    └─────────────┘
-```
-
-1. **Glossary** — WoW terms translated instantly (raids, bosses, slang)
-2. **Cache** — Seen before? Instant and free
-3. **API** — New text uses credits
-
----
-
-## 🎮 Language Settings
-
-Open settings with `/wt show`:
-
-- **Incoming**: What language to translate FROM (Chinese, Japanese, Korean, Russian)
-- **Outgoing**: Enable translation for Say, Party, Guild, Whisper, etc.
-- **Channel Filtering**: Toggle individual channels (Say, Yell, Whisper, Party, Guild, Raid, Battleground, World/Local) for both incoming and outgoing
-- **AFK Pause**: Translation pauses while AFK to save credits (on by default, configurable)
-
----
-
-## ❓ Troubleshooting
-
-| Problem | Solution |
-|---------|----------|
-| DLL not loading | Ensure `WoWTranslate.dll` is next to `WoW.exe` and listed in `dlls.txt` |
-| "Out of credits" | Your API key needs more credits — contact whoever provided your key |
-| No translations | Run `/wt status` to check DLL loaded, then `/wt test 你好` |
-| Launcher issues | Run `WoW.exe` directly instead of through a launcher |
-
----
-
-## 🛠️ Building from Source
-
-<details>
-<summary>For contributors</summary>
-
-**Requirements:** Windows, Visual Studio 2022, CMake 3.20+
+On macOS/Wine installs, you can use the helper script:
 
 ```bash
-cd dll && mkdir build && cd build
+scripts/install-macos.sh /path/to/your/wow-folder
+```
+
+Then launch WoW and run:
+
+```text
+/wt provider google
+/wt googlekey YOUR_GOOGLE_CLOUD_TRANSLATION_API_KEY
+/wt test 你好
+```
+
+## Get A Google API Key
+
+Google Cloud Translation Basic v2 supports API-key authentication. Advanced v3 uses different authentication and is not what WoWTranslate 2.0 targets.
+
+1. Open https://console.cloud.google.com/ and sign in.
+2. Click the project selector at the top of the page.
+3. Click `New Project`.
+4. Name it `WoWTranslate`.
+5. Click `Create`.
+6. Make sure the `WoWTranslate` project is selected.
+7. Open `APIs & Services` -> `Library`.
+8. Search for `Cloud Translation API`.
+9. Open `Cloud Translation API`.
+10. Click `Enable`.
+11. Enable billing when Google asks. The API will not work without billing.
+12. Open `APIs & Services` -> `Credentials`.
+13. Click `Create credentials` -> `API key`.
+14. Copy the new API key somewhere temporary.
+15. Open the API key details page.
+16. Under `API restrictions`, choose `Restrict key`.
+17. Select `Cloud Translation API`.
+18. Save.
+19. Optional but recommended: open the Cloud Translation API quotas page and set a low daily character or request cap that matches your budget.
+20. Optional but recommended: set a Google Cloud budget alert for the project.
+21. Launch WoW.
+22. Run `/wt provider google`.
+23. Run `/wt googlekey YOUR_KEY_HERE`.
+24. Run `/wt test 你好`.
+25. If it fails, run `/wt status` and check the provider state and last error.
+
+## Commands
+
+```text
+/wt show
+/wt status
+/wt test <text>
+/wt on
+/wt off
+/wt outgoing on|off
+/wt provider google|openai|custom
+/wt googlekey <key>
+/wt key <key>                  Deprecated alias for /wt googlekey when provider is google
+/wt openaikey <key>
+/wt openaiendpoint <url>
+/wt openaimodel <model>
+/wt customendpoint <url>
+/wt customkey <key>
+/wt customauth <header> <scheme>
+/wt customtemplate <json>
+/wt custompath <path>
+/wt clearcache
+```
+
+`/wt status` shows DLL loaded state, provider, configured/ready state, last error, incoming/outgoing state, cache entries, cache hit rate, and pending requests.
+
+## OpenAI-Compatible Provider
+
+Use this for OpenAI or any service that implements a compatible chat completions API.
+
+```text
+/wt provider openai
+/wt openaiendpoint https://api.openai.com/v1/chat/completions
+/wt openaimodel gpt-4.1-mini
+/wt openaikey YOUR_KEY
+/wt test 你好
+```
+
+The DLL sends a chat completion request with temperature `0` and a system instruction to translate only, preserve URLs/placeholders exactly, and return no commentary. It reads `choices[0].message.content`.
+
+## Custom HTTPS JSON Provider
+
+Use this for any HTTPS JSON translation service.
+
+```text
+/wt provider custom
+/wt customendpoint https://example.com/translate
+/wt customkey YOUR_KEY
+/wt customauth Authorization Bearer
+/wt customtemplate {"text":"{text}","source":"{source}","target":"{target}"}
+/wt custompath data.translation
+/wt test 你好
+```
+
+Placeholders available in the request template:
+
+- `{text}`
+- `{source}`
+- `{target}`
+
+Response paths support object fields and array indexes, for example:
+
+```text
+translation
+data.translation
+choices[0].message.content
+```
+
+The configuration panel exposes the common custom fields. The full JSON body template is intentionally slash-command or INI-only because it is too long for the WoW 1.12 settings panel.
+
+## Optional WoWTranslate.ini
+
+Place `WoWTranslate.ini` next to `WoWTranslate.dll` if you prefer not to type keys in chat. This file is local and ignored by git.
+
+```ini
+[provider]
+type=google
+
+[google]
+api_key=AIza...
+
+[openai]
+endpoint=https://api.openai.com/v1/chat/completions
+api_key=sk-...
+model=gpt-4.1-mini
+temperature=0
+
+[custom]
+endpoint=https://example.com/translate
+api_key=...
+auth_header=Authorization
+auth_scheme=Bearer
+request_template={"text":"{text}","source":"{source}","target":"{target}"}
+response_path=translation
+```
+
+Valid provider types are `google`, `openai`, and `custom`.
+
+## Security
+
+API keys are stored locally in plaintext if you save them through WoW SavedVariables or `WoWTranslate.ini`. Do not share your SavedVariables or INI file.
+
+For Google keys, restrict the key to `Cloud Translation API`. Application restrictions are harder for a desktop game DLL because browser and mobile app restrictions do not apply; IP restrictions only work well if you have a stable public IP. Use API restrictions plus low usage caps and budget alerts.
+
+## Build From Source
+
+Requirements:
+
+- Windows
+- Visual Studio 2022 with C++ workload
+- CMake 3.20+
+
+```bat
+cd dll
+build.bat
+```
+
+Manual build:
+
+```bat
+cd dll
+mkdir build
+cd build
 cmake .. -G "Visual Studio 17 2022" -A Win32
 cmake --build . --config Release
 ```
 
-Output: `dll/build/bin/Release/WoWTranslate.dll`
+Output:
 
-</details>
+```text
+dll/build/bin/Release/WoWTranslate.dll
+```
 
----
+GitHub Actions also builds the 32-bit DLL on pushes to `main` and uploads an artifact named `WoWTranslate-dll`.
 
-## 📄 License
+## License
 
 MIT License
-
----
-
-<p align="center">
-  <sub>Made for the WoW 1.12 community</sub>
-</p>

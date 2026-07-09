@@ -78,10 +78,10 @@ jobs:
     - name: Create release zip
       working-directory: release
       run: |
-        zip -r WoWTranslate-v0.1.zip WoWTranslate.dll WoWTranslate/
+        zip -r WoWTranslate-v2.0.zip WoWTranslate.dll WoWTranslate/
 
     - name: Upload release zip
       uses: actions/upload-artifact@v4
       with:
         name: WoWTranslate-Release
-        path: release/WoWTranslate-v0.1.zip
+        path: release/WoWTranslate-v2.0.zip
