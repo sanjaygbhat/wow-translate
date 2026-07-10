@@ -7,7 +7,8 @@ BUILD_DIR="$SCRIPT_DIR/build"
 OBJ_DIR="$BUILD_DIR/obj"
 MINHOOK_SRC="$BUILD_DIR/minhook-src"
 OUTPUT_DLL="$BUILD_DIR/WoWTranslate.dll"
-CLIENT_DIR="/Users/sanjaybhat/WoW Install/TurtleWoW eng client 1.18.1"
+# Optional: set WOW_CLIENT_DIR to your WoW 1.12 folder to auto-deploy the DLL
+CLIENT_DIR="${WOW_CLIENT_DIR:-}"
 CLIENT_DLL="$CLIENT_DIR/WoWTranslate.dll"
 MINGW_BIN="/opt/homebrew/opt/mingw-w64/bin"
 
@@ -133,12 +134,13 @@ if grep -Eiq 'libstdc\+\+-6\.dll|libgcc_s_.*\.dll|libwinpthread-1\.dll' <<<"$DLL
     exit 1
 fi
 
-if [ ! -d "$CLIENT_DIR" ]; then
-    echo "ERROR: client directory does not exist: $CLIENT_DIR" >&2
-    exit 1
+if [ -n "$CLIENT_DIR" ]; then
+    if [ ! -d "$CLIENT_DIR" ]; then
+        echo "ERROR: WOW_CLIENT_DIR does not exist: $CLIENT_DIR" >&2
+        exit 1
+    fi
+    cp -f "$OUTPUT_DLL" "$CLIENT_DLL"
 fi
-
-cp -f "$OUTPUT_DLL" "$CLIENT_DLL"
 
 echo
 echo "DLL size:"
@@ -147,4 +149,4 @@ stat -f '%z bytes' "$OUTPUT_DLL"
 echo
 echo "Confirmed outputs:"
 ls -l "$OUTPUT_DLL"
-ls -l "$CLIENT_DLL"
+[ -n "$CLIENT_DIR" ] && ls -l "$CLIENT_DLL"
