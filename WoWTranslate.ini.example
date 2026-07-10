@@ -1,0 +1,28 @@
+; WoWTranslate configuration (optional)
+; Copy this file to WoWTranslate.ini next to WoWTranslate.dll and edit.
+; Everything here can also be set in game with /wt commands.
+
+[provider]
+; one of: google_free (no key needed, default), google, openai, custom
+type = google_free
+
+[google]
+; * RECOMMENDED: near perfect and seamless. ~500k chars/month free tier.
+;   See the README for the 10-minute key setup guide, then set:
+;   type = google  (above) and your key here:
+api_key =
+
+[openai]
+endpoint = https://api.openai.com/v1/chat/completions
+api_key =
+model = gpt-4.1-mini
+temperature = 0
+
+[custom]
+; any HTTPS JSON endpoint (e.g. self-hosted LibreTranslate) — see README
+endpoint =
+api_key =
+auth_header = Authorization
+auth_scheme = Bearer
+request_template =
+response_path = translation
