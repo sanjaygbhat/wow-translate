@@ -658,13 +658,6 @@ WoWTranslateGlossary["制皮"] = "Leatherworking"
 WoWTranslateGlossary["附魔"] = "Enchanting"
 
 -- ============================================================================
--- SERVER SLANG
--- ============================================================================
-WoWTranslateGlossary["龟龟"] = "turtle server"
-WoWTranslateGlossary["乌龟服"] = "turtle server"
-WoWTranslateGlossary["龟服"] = "turtle server"
-
--- ============================================================================
 -- GLOSSARY LOOKUP FUNCTIONS
 -- ============================================================================
 

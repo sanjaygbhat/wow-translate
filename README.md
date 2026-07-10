@@ -17,7 +17,7 @@
 
 ---
 
-WoWTranslate translates chat for World of Warcraft 1.12 clients, including Turtle/CapyCraft 1.18.1-style installs.
+WoWTranslate translates chat for World of Warcraft 1.12 (vanilla) clients.
 
 Version 2.0 is two local pieces:
 

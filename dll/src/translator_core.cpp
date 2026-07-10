@@ -60,9 +60,10 @@ void ReplaceAll(string& value, const string& from, const string& to) {
 }
 
 string JsonTemplateEscape(const string& value) {
-    // error_handler_t::replace: chat text can contain invalid UTF-8 (server
-    // truncates at 255 bytes mid-character; Turtle language-garbling). A bare
-    // dump() THROWS on it — on the worker thread that killed the process.
+    // error_handler_t::replace: chat text can contain invalid UTF-8 (the server
+    // truncates at 255 bytes mid-character; WoW's language system garbles
+    // unknown-language text). A bare dump() THROWS on it — on the worker
+    // thread that killed the process.
     string dumped = json(value).dump(-1, ' ', false, json::error_handler_t::replace);
     if (dumped.length() >= 2 && dumped.front() == '"' && dumped.back() == '"') {
         return dumped.substr(1, dumped.length() - 2);

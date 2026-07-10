@@ -260,8 +260,8 @@ local itemCacheCounter = 0
 
 -- We deliberately NEVER query the server for uncached items.
 -- GameTooltip:SetHyperlink() on an item missing from the local WDB cache is
--- a known hard-crash in the 1.12 client (worse with custom Turtle item IDs),
--- and launchers like WoWSilicon/TurtleSilicon wipe the WDB on every start,
+-- a known hard-crash in the 1.12 client (worse with servers' custom item IDs),
+-- and some launchers/setups wipe the WDB cache on every start,
 -- so probing would fire for every item linked in chat. Uncached items simply
 -- keep their original link text; cached ones still get localized names.
 local function TriggerItemCache(itemId)
