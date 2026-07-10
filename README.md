@@ -26,7 +26,7 @@ Version 2.0 is two local pieces:
 
 The DLL calls your configured translation provider directly over HTTPS from your local machine. **It works out of the box with no API key** via Google's free translate endpoint (`google_free`, the default). For heavier use or guaranteed stability, switch to Google Cloud Translation Basic v2 with your own key (`/wt provider google`), an OpenAI-compatible endpoint, or any custom HTTPS provider.
 
-**⭐ The author heavily recommends the Google API Key translation (`/wt provider google`) — it is near perfect and seamless.** Setup takes ~10 minutes ([guide below](#-get-a-google-api-key)), the free tier of ~500k characters/month covers normal play, and you get Google's best translation model with no rate limits.
+**⭐ The author heavily recommends the Google API Key translation (`/wt provider google`) — it is near perfect and seamless.** The difference is not subtle: **Google Free literally translates the text word-by-word, while the API method gives you the proper translation *in context*** — it understands what players actually mean, and in real chat this makes a huge difference (see the table below). Setup takes ~10 minutes ([guide below](#-get-a-google-api-key)), the free tier of ~500k characters/month covers normal play, and you get Google's best translation model with no rate limits.
 
 > **google_free vs google:** the free endpoint needs zero setup but is unofficial — Google rate-limits it (heavy chat may briefly show untranslated messages), could change it anytime, and serves an older translation model. The keyed `google` provider is the official API: ~500k characters/month free, then paid, never throttled at chat volumes, and noticeably better at gamer language.
 
@@ -34,6 +34,7 @@ Real side-by-side outputs (same input, both providers, captured live):
 
 | Chinese chat | Google Free (`google_free`) | Google with Key (`google`) |
 |---|---|---|
+| | ***literal translation*** | ***translation in context*** |
 | 法师拉仇恨了，快撤！ | "The mage has drawn **hatred**, retreat quickly!" | "The mage has drawn **aggro**, retreat quickly!" |
 | 萨满快给我加血，我要死了哈哈 | "Shaman, please give me more **blood**, I'm going to die haha" | "Shaman, **heal me!** I'm dying, haha!" |
 | 副本掉落的紫装归需求优先 | "Purple equipment dropped from the dungeon **will be given priority**" | "Purple gear dropped in dungeons should be **prioritized for those in need**" |
