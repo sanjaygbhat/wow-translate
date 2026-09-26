@@ -1,0 +1,80 @@
+## Interface: 16001
+## Title: WoW Translate
+## Title-deDE: WoW Translate
+## Notes: Read and write chat in other languages. Free Quick mode works offline; optional Accurate mode uses a companion app.
+## Notes-deDE: Chat in anderen Sprachen lesen und schreiben. Der kostenlose Schnellmodus funktioniert offline; der optionale Genaumodus nutzt eine Begleit-App.
+## Notes-frFR: Lisez et écrivez le chat dans d'autres langues. Le mode Rapide gratuit fonctionne hors ligne ; le mode Précis optionnel utilise une application compagnon.
+## Notes-esES: Lee y escribe el chat en otros idiomas. El modo Rápido gratuito funciona sin conexión; el modo Preciso opcional usa una aplicación complementaria.
+## Notes-esMX: Lee y escribe el chat en otros idiomas. El modo Rápido gratuito funciona sin conexión; el modo Preciso opcional usa una aplicación complementaria.
+## Notes-ptBR: Leia e escreva no chat em outros idiomas. O modo Rápido gratuito funciona offline; o modo Preciso opcional usa um aplicativo complementar.
+## Notes-ruRU: Читайте и пишите в чат на других языках. Бесплатный быстрый режим работает офлайн; дополнительный точный режим использует приложение-компаньон.
+## Notes-koKR: 다른 언어의 채팅을 읽고 쓰세요. 무료 빠른 모드는 오프라인으로 작동하며, 선택 사항인 정확 모드는 동반 앱을 사용합니다.
+## Notes-zhTW: 閱讀並使用其他語言聊天。免費的快速模式可離線使用；選用的精準模式需搭配輔助程式。
+## Notes-zhCN: 阅读并使用其他语言聊天。免费的快速模式可离线使用；可选的精准模式需搭配辅助程序。
+## Author: sanjaygbhat
+## Version: 3.0.0
+## Category: Chat & Communication
+## IconTexture: Interface\Icons\INV_Misc_Note_01
+## SavedVariables: WoWTranslateDB
+## AddonCompartmentFunc: WoWTranslate_OnAddonCompartmentClick
+## AddonCompartmentFuncOnEnter: WoWTranslate_OnAddonCompartmentEnter
+## AddonCompartmentFuncOnLeave: WoWTranslate_OnAddonCompartmentLeave
+## X-License: MIT
+## X-Website: https://github.com/sanjaygbhat/wow-translate
+
+# WoW: Forever (game type "camelot", interface 16001) only loads the _Camelot
+# TOC. This addon targets the Forever client's modern (Midnight-era) API.
+
+Core.lua
+Locales\enUS.lua
+Locales\deDE.lua
+Locales\frFR.lua
+Locales\esES.lua
+Locales\ptBR.lua
+Locales\ruRU.lua
+Locales\koKR.lua
+Locales\zhTW.lua
+Locales\zhCN.lua
+
+Engine\Text.lua
+Engine\Detect.lua
+Engine\Dictionary.lua
+Engine\Translate.lua
+Engine\Links.lua
+
+Dictionaries\zh_1.lua
+Dictionaries\zh_2.lua
+Dictionaries\zh_3.lua
+Dictionaries\ko_1.lua
+Dictionaries\ko_2.lua
+Dictionaries\ko_3.lua
+Dictionaries\ja_1.lua
+Dictionaries\ja_2.lua
+Dictionaries\ja_3.lua
+Dictionaries\ru_1.lua
+Dictionaries\ru_2.lua
+Dictionaries\ru_3.lua
+Dictionaries\de_1.lua
+Dictionaries\de_2.lua
+Dictionaries\de_3.lua
+Dictionaries\fr_1.lua
+Dictionaries\fr_2.lua
+Dictionaries\fr_3.lua
+Dictionaries\es_1.lua
+Dictionaries\es_2.lua
+Dictionaries\es_3.lua
+Dictionaries\pt_1.lua
+Dictionaries\pt_2.lua
+Dictionaries\pt_3.lua
+
+Features\Persist.lua
+Features\Incoming.lua
+Features\Outgoing.lua
+Features\Names.lua
+Features\CompanionLink.lua
+
+UI\Widgets.lua
+UI\Options.lua
+UI\Minimap.lua
+
+Commands.lua

@@ -1,0 +1,68 @@
+name: Release
+
+# Push a tag like v3.0.0 to publish:
+#   - WoWTranslate-<version>.zip  (the addon, ready for CurseForge / manual install)
+#   - WoWTranslateCompanion.exe   (the Accurate mode app for Windows)
+# If the repository has a CF_API_KEY secret and a CF_PROJECT_ID variable, the
+# addon zip is also uploaded to CurseForge, tagged for WoW: Forever.
+
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  addon:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: sudo apt-get update && sudo apt-get install -y lua5.1
+      - run: lua5.1 tests/check_dictionaries.lua && lua5.1 tests/harness.lua
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: python scripts/package_addon.py
+      - name: Upload to CurseForge (only when configured)
+        env:
+          CF_API_KEY: ${{ secrets.CF_API_KEY }}
+          CF_PROJECT_ID: ${{ vars.CF_PROJECT_ID }}
+        run: python scripts/curseforge_upload.py dist/*.zip CHANGELOG.md
+      - uses: actions/upload-artifact@v4
+        with:
+          name: addon
+          path: dist/*.zip
+
+  companion:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: python -m unittest discover -s companion/tests
+      - working-directory: companion
+        run: |
+          python -m pip install --upgrade pip pyinstaller
+          pyinstaller --noconfirm --onefile --windowed --name WoWTranslateCompanion run_companion.py
+      - uses: actions/upload-artifact@v4
+        with:
+          name: companion
+          path: companion/dist/WoWTranslateCompanion.exe
+
+  publish:
+    needs: [addon, companion]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          path: out
+      - uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            out/addon/*.zip
+            out/companion/WoWTranslateCompanion.exe
+          body_path: CHANGELOG.md

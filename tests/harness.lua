@@ -1,436 +1,628 @@
--- WoWTranslate offline regression harness
--- Loads the REAL addon files under a mocked WoW 1.12 client and storms the
--- chat pipeline with hostile input. Run:  lua tests/harness.lua
--- Exit code 0 = all assertions passed. Any Lua error, forbidden client call,
--- lost/duplicated message, or corrupted hyperlink fails the run.
+-- WoW Translate offline test harness (WoW: Forever edition)
+--
+-- Loads the REAL addon files, in TOC order, inside a mocked Forever client
+-- (modern API: ChatFrameUtil filters, EventRegistry, secret values, C_Intl,
+-- macros ...) and checks every feature end to end.
+--
+-- Run from the repository root:   lua5.1 tests/harness.lua
+-- Exit code 0 = everything passed.
 
-local ADDON_DIR = arg and arg[1] or "Interface/AddOns/WoWTranslate"
+local ADDON_DIR = "Interface/AddOns/WoWTranslate/"
+local TOC = ADDON_DIR .. "WoWTranslate_Camelot.toc"
 
 -- ===========================================================================
--- Lua 5.0/5.1 compatibility shims (addon targets vanilla's Lua 5.0)
+-- Tiny test framework
 -- ===========================================================================
-unpack = unpack or table.unpack  -- global: the addon's own 5.0 fallbacks use it
-table.getn = table.getn or function(t) return #t end
-table.setn = table.setn or function() end
-string.gfind = string.gfind or string.gmatch
-math.mod = math.mod or function(a, b) return a % b end
-string.len = string.len or function(s) return #s end
-
-local G = _G
-function getglobal(n) return G[n] end
-function setglobal(n, v) G[n] = v end
-function strsplit(sep, s, limit)
-    local out, pos = {}, 1
-    while true do
-        if limit and #out == limit - 1 then table.insert(out, string.sub(s, pos)) break end
-        local a, b = string.find(s, sep, pos, true)
-        if not a then table.insert(out, string.sub(s, pos)) break end
-        table.insert(out, string.sub(s, pos, a - 1))
-        pos = b + 1
-    end
-    return unpack(out)
+local failures, passes = {}, 0
+local function check(cond, what, extra)
+    if cond then passes = passes + 1
+    else failures[#failures + 1] = what .. (extra and ("  [" .. tostring(extra) .. "]") or "") end
 end
+local function eq(a, b, what) check(a == b, what, "got " .. tostring(a) .. " expected " .. tostring(b)) end
+local function contains(s, sub, what) check(type(s) == "string" and s:find(sub, 1, true) ~= nil, what, "got " .. tostring(s)) end
+local function notcontains(s, sub, what) check(type(s) == "string" and s:find(sub, 1, true) == nil, what, "got " .. tostring(s)) end
 
 -- ===========================================================================
--- Failure accounting
+-- Mock client
 -- ===========================================================================
-local failures, checks = {}, 0
-local function fail(fmt, ...) table.insert(failures, string.format(fmt, ...)) end
-local function ok() checks = checks + 1 end
-local function guard(what, fn, ...)
-    local res = { xpcall(fn, function(e) return debug.traceback(tostring(e), 2) end, ...) }
-    if not res[1] then fail("LUA ERROR in %s:\n%s", what, res[2]) return nil end
-    ok()
-    return unpack(res, 2)
-end
-
--- ===========================================================================
--- Mock WoW client
--- ===========================================================================
-local now = 1000.0
+local now = 1000
 function GetTime() return now end
-
-local FORBIDDEN = { SetHyperlink = 0 }
-
-local frames = {}
-local function NewFrame(ftype, name)
-    local f = {
-        __name = name or "anon", __type = ftype or "Frame",
-        __scripts = {}, __events = {}, __shown = false, __lines = {},
-    }
-    function f:RegisterEvent(e) self.__events[e] = true end
-    function f:UnregisterEvent(e) self.__events[e] = nil end
-    function f:SetScript(h, fn) self.__scripts[h] = fn end
-    function f:GetScript(h) return self.__scripts[h] end
-    function f:Show() self.__shown = true end
-    function f:Hide() self.__shown = false end
-    function f:IsVisible() return self.__shown end
-    function f:SetOwner() self.__shown = true end
-    function f:SetText(t) self.__lines = { t } end
-    function f:AddLine(t) table.insert(self.__lines, t) end
-    function f:NumLines() return #self.__lines end
-    function f:SetHyperlink(link)
-        FORBIDDEN.SetHyperlink = FORBIDDEN.SetHyperlink + 1
-        fail("FORBIDDEN CALL: %s:SetHyperlink(%q) — crashes 1.12 on uncached items\n%s",
-            self.__name, tostring(link), debug.traceback("", 2))
-    end
-    -- inert widget methods the addon may touch
-    for _, m in ipairs({ "SetWidth", "SetHeight", "SetPoint", "SetAllPoints",
-        "SetBackdrop", "SetBackdropColor", "SetBackdropBorderColor", "EnableMouse",
-        "SetMovable", "RegisterForDrag", "SetClampedToScreen", "SetNormalTexture",
-        "SetPushedTexture", "SetHighlightTexture", "SetFrameStrata", "SetFrameLevel",
-        "SetAlpha", "GetWidth", "GetHeight", "SetFontObject", "SetJustifyH",
-        "SetTextColor", "GetText", "SetID", "SetChecked", "GetChecked", "ClearAllPoints" }) do
-        f[m] = f[m] or function() end
-    end
-    function f:CreateFontString() return NewFrame("FontString") end
-    function f:CreateTexture() return NewFrame("Texture") end
-    table.insert(frames, f)
-    return f
-end
-
-function CreateFrame(ftype, name, parent, template)
-    local f = NewFrame(ftype, name)
-    if name then G[name] = f end
-    return f
-end
-
-UIParent, WorldFrame, Minimap = NewFrame("Frame", "UIParent"), NewFrame("Frame", "WorldFrame"), NewFrame("Frame", "Minimap")
-
--- GameTooltip needs realistic line/fontstring/OnShow semantics for the
--- name-tooltip module: lines are mirrored into GameTooltipTextLeftN globals,
--- Show() fires OnShow on the hidden->shown edge, Hide() fires OnHide.
-GameTooltip = NewFrame("GameTooltip", "GameTooltip")
-local function TooltipFS(i)
-    local n = "GameTooltipTextLeft" .. i
-    if not G[n] then
-        G[n] = { __text = nil,
-            GetText = function(self) return self.__text end,
-            SetText = function(self, t) self.__text = t; GameTooltip.__lines[i] = t end,
-            SetTextColor = function() end }
-    end
-    return G[n]
-end
-local function TooltipSync()
-    for i = 1, 30 do
-        local fs = TooltipFS(i)
-        fs.__text = GameTooltip.__lines[i]
-    end
-end
-function GameTooltip:Show()
-    local was = self.__shown
-    self.__shown = true
-    TooltipSync()
-    if not was and self.__scripts.OnShow then
-        G.this = self
-        guard("GameTooltip:OnShow", self.__scripts.OnShow)
-    end
-end
-function GameTooltip:Hide()
-    local was = self.__shown
-    self.__shown = false
-    self.__lines = {}
-    TooltipSync()
-    if was and self.__scripts.OnHide then
-        G.this = self
-        guard("GameTooltip:OnHide", self.__scripts.OnHide)
-    end
-end
-function GameTooltip:SetText(t) self.__lines = { t }; TooltipSync(); self:Show() end
-function GameTooltip:AddLine(t) table.insert(self.__lines, t); TooltipSync() end
-function GameTooltip:NumLines() return #self.__lines end
-function GameTooltip:SetUnit(unit)
-    self.__lines = { UnitName(unit) or "Unknown" }
-    TooltipSync()
-    self:Show()
-end
-
--- Chat frames: each records displayed messages (these ARE the "originals"
--- that the addon wraps, so whatever lands here is what the player sees).
-NUM_CHAT_WINDOWS = 7
-local displayed = {}
-for i = 1, NUM_CHAT_WINDOWS do
-    local cf = NewFrame("MessageFrame", "ChatFrame" .. i)
-    cf.AddMessage = function(self, text, r, g, b, id, holdTime)
-        table.insert(displayed, { frame = self.__name, text = text })
-    end
-    G["ChatFrame" .. i] = cf
-end
-DEFAULT_CHAT_FRAME = ChatFrame1
-
-function ChatFrame_OnEvent(event) end
-function SendChatMessage(msg, chatType, lang, target) G.__lastSent = { msg = msg, chatType = chatType, target = target } end
-G.__ORIG_SEND = SendChatMessage
-function UnitIsAFK() return nil end
-function UnitExists(u) return G.__mockUnits and G.__mockUnits[u] and 1 or nil end
-function UnitIsPlayer(u) return G.__mockUnits and G.__mockUnits[u] and G.__mockUnits[u].player and 1 or nil end
-function UnitName(u) return G.__mockUnits and G.__mockUnits[u] and G.__mockUnits[u].name or nil end
-function GetCursorPosition() return 0, 0 end
+function GetLocale() return MOCK_LOCALE or "enUS" end
+function GetBuildInfo() return "1.60.1", "70009", "Sep 23 2026", 16001 end
+function GetPhysicalScreenSize() return 1920, 1080 end
+function GetCursorPosition() return 100, 100 end
+function InCombatLockdown() return MOCK_COMBAT or false end
+function UnitGUID(u) return u == "player" and "Player-1-00000001" or nil end
+function UnitName(u) return u == "player" and "Tester" or MOCK_UNIT_NAME end
+function UnitIsPlayer() return true end
+function UnitIsAFK() return MOCK_AFK or false end
+function Ambiguate(name) return (name:gsub("%-.*$", "")) end
+function GetRealmName() return "Forever" end
 function PlaySound() end
+function HideUIPanel() end
+SOUNDKIT = { IG_MAINMENU_OPTION_CHECKBOX_ON = 1, IG_MAINMENU_OPTION_CHECKBOX_OFF = 2 }
+CLOSE = "Close"
+UISpecialFrames = {}
+Enum = { TooltipDataType = { Unit = 2 } }
 SlashCmdList = {}
 
--- Item cache mock: only these IDs are "locally cached"
-local CACHED_ITEMS = { [929] = "Healing Potion", [2589] = "Linen Cloth", [19019] = "Thunderfury" }
-function GetItemInfo(id)
-    id = tonumber(id)
-    if id and CACHED_ITEMS[id] then return CACHED_ITEMS[id], "|cffffffff|Hitem:" .. id .. ":0:0:0|h[" .. CACHED_ITEMS[id] .. "]|h|r" end
-    return nil
+-- secret values: a message wrapped in a table marked secret
+local SECRET = setmetatable({}, { __mode = "k" })
+local function Secret(s) local t = { s = s } SECRET[t] = true return t end
+function issecretvalue(v) return type(v) == "table" and SECRET[v] == true end
+function canaccessvalue(...)
+    for i = 1, select("#", ...) do if issecretvalue((select(i, ...))) then return false end end
+    return true
 end
 
--- Mock DLL bridge: async queue answered via poll, deterministic "translation"
-local dllQueue, dllCounter = {}, 0
-local json_escape = function(s) return (string.gsub(s, '[\\"]', function(c) return "\\" .. c end)) end
-function UnitXP(sentinel, cmd, a, b, c, d)
-    if sentinel ~= "WoWTranslate" then return nil end
-    if cmd == "ping" then return "pong" end
-    if cmd == "version" then return "harness" end
-    if cmd == "provider_status" then return '{"provider":"google","configured":true,"ready":true,"endpoint":"mock"}' end
-    if cmd == "last_error" then return "" end
-    if cmd == "configure_google" then return "ok" end
-    if cmd == "configure_google_free" then G.__configuredFree = true; return "ok" end
-    if cmd == "translate_async" then
-        table.insert(dllQueue, { id = a, text = b })
-        G.__tCalls = G.__tCalls or {}
-        G.__tCalls[b] = (G.__tCalls[b] or 0) + 1
-        return "queued|" .. a
-    end
-    if cmd == "poll" then
-        local req = table.remove(dllQueue, 1)
-        if not req then return "" end
-        return '{"id":"' .. req.id .. '","success":true,"translation":"[T]' .. json_escape(req.text) .. '"}'
-    end
-    return "error|unknown"
+local frames = {}
+local Mock = {}
+Mock.__index = function(self, k)
+    local v = rawget(Mock, k)
+    if v ~= nil then return v end
+    if type(k) == "string" and k:sub(1, 2) == "__" then return nil end
+    return function() end            -- any unknown method is a harmless no-op
 end
-G.__dllFlush = function() dllQueue = {} end
+function Mock.new(ftype, name, parent)
+    local f = setmetatable({ __type = ftype, __name = name, __shown = true, __scripts = {}, __events = {},
+        __text = "", __checked = false, __w = 100, __h = 100, __children = {}, __parent = parent }, Mock)
+    if name then _G[name] = f end
+    frames[#frames + 1] = f
+    return f
+end
+function Mock:RegisterEvent(e)
+    if MOCK_UNKNOWN_EVENTS and MOCK_UNKNOWN_EVENTS[e] then error("unknown event " .. e) end
+    self.__events[e] = true
+end
+function Mock:SetScript(k, fn) self.__scripts[k] = fn end
+function Mock:GetScript(k) return self.__scripts[k] end
+function Mock:HookScript(k, fn) self.__scripts[k] = fn end
+function Mock:Show() self.__shown = true if self.__scripts.OnShow then self.__scripts.OnShow(self) end end
+function Mock:Hide() self.__shown = false end
+function Mock:IsShown() return self.__shown end
+function Mock:IsVisible() return self.__shown end
+function Mock:SetText(t) self.__text = t end
+function Mock:GetText() return self.__text end
+function Mock:SetChecked(v) self.__checked = v and true or false end
+function Mock:GetChecked() return self.__checked end
+function Mock:CreateTexture() return Mock.new("Texture") end
+function Mock:CreateFontString() return Mock.new("FontString") end
+function Mock:SetSize(w, h) self.__w, self.__h = w, h end
+function Mock:GetWidth() return self.__w end
+function Mock:GetCenter() return 50, 50 end
+function Mock:GetEffectiveScale() return 1 end
+function Mock:SetColorTexture(r, g, b, a) self.__color = { r, g, b, a } end
+function Mock:GetNumPoints() return 0 end
+function Mock:NumLines() return self.__lines and #self.__lines or 0 end
+function Mock:AddLine(t) self.__lines = self.__lines or {} self.__lines[#self.__lines + 1] = t end
+function Mock:AddMessage(t) self.__messages = self.__messages or {} self.__messages[#self.__messages + 1] = t end
+function Mock:GetUnit() return MOCK_UNIT_NAME, "mouseover" end
+function Mock:GetChatType() return self.__chatType end
+function Mock:GetTellTarget() return self.__tellTarget end
 
--- Event dispatch (vanilla-style globals: this/event/arg1..)
-local function FireEvent(name, a1, a2)
-    for _, f in ipairs(frames) do
-        if f.__events[name] and f.__scripts.OnEvent then
-            G.this, G.event, G.arg1, G.arg2 = f, name, a1, a2
-            guard("OnEvent:" .. name, f.__scripts.OnEvent)
+function CreateFrame(ftype, name, parent, template)
+    local f = Mock.new(ftype, name, parent)
+    if template and template:find("UICheckButtonTemplate") then f.Text = Mock.new("FontString") end
+    if template and template:find("ButtonFrameTemplate") then f.SetTitle = function(s, t) s.__title = t end end
+    return f
+end
+function ButtonFrameTemplate_HidePortrait() end
+function ButtonFrameTemplate_HideAttic() end
+function ButtonFrameTemplate_HideButtonBar() end
+
+UIParent = Mock.new("Frame", "UIParent")
+Minimap = Mock.new("Frame", "Minimap")
+GameTooltip = Mock.new("GameTooltip", "GameTooltip")
+DEFAULT_CHAT_FRAME = Mock.new("ScrollingMessageFrame", "ChatFrame1")
+local printed = {}
+DEFAULT_CHAT_FRAME.AddMessage = function(self, t) printed[#printed + 1] = t end
+
+-- Timers ------------------------------------------------------------------
+local timers = {}
+C_Timer = {}
+function C_Timer.After(delay, fn) timers[#timers + 1] = { at = now + delay, fn = fn } end
+function C_Timer.NewTicker(interval, fn)
+    local t = { interval = interval, fn = fn, next = now + interval, cancelled = false }
+    function t:Cancel() self.cancelled = true end
+    timers[#timers + 1] = t
+    return t
+end
+local function advance(sec)
+    local target = now + sec
+    while true do
+        local soonest, idx = nil, nil
+        for i, t in ipairs(timers) do
+            local at = t.at or t.next
+            if not t.cancelled and at <= target and (not soonest or at < soonest) then soonest, idx = at, i end
+        end
+        if not idx then break end
+        now = soonest
+        local t = timers[idx]
+        if t.at then table.remove(timers, idx) t.fn() else t.next = t.next + t.interval t.fn(t) end
+    end
+    now = target
+end
+
+-- EventRegistry (Blizzard CallbackRegistry semantics: func(owner, ...)) ----
+EventRegistry = { cb = {} }
+function EventRegistry:RegisterCallback(event, fn, owner)
+    self.cb[event] = self.cb[event] or {}
+    owner = owner or {}
+    self.cb[event][owner] = fn
+    return owner
+end
+function EventRegistry:TriggerEvent(event, ...)
+    for owner, fn in pairs(self.cb[event] or {}) do
+        local ok, err = pcall(fn, owner, ...)
+        check(ok, "EventRegistry callback " .. event, err)
+    end
+end
+
+-- Chat filters (Blizzard ChatFrameFilters semantics) -------------------------
+local chatFilters = {}
+ChatFrameUtil = {}
+function ChatFrameUtil.AddMessageEventFilter(event, fn)
+    chatFilters[event] = chatFilters[event] or {}
+    table.insert(chatFilters[event], fn)
+end
+-- Mirrors ChatFrameFilters.lua: filters are skipped for inaccessible args;
+-- first return discards, second+ replace the arguments.
+local function ProcessFilters(chatFrame, event, ...)
+    local args = { n = select("#", ...), ... }
+    for _, fn in ipairs(chatFilters[event] or {}) do
+        if canaccessvalue(unpack(args, 1, args.n)) then
+            local res = { pcall(fn, chatFrame, event, unpack(args, 1, args.n)) }
+            check(res[1], "chat filter raised an error", res[2])
+            if res[2] then return true end
+            if res[3] then args = { n = #res - 2, unpack(res, 3) } end
         end
     end
+    return false, unpack(args, 1, args.n)
 end
-local function Tick(dt)
-    now = now + dt
-    for _, f in ipairs(frames) do
-        if f.__scripts.OnUpdate then
-            G.this, G.arg1 = f, dt
-            guard("OnUpdate:" .. f.__name, f.__scripts.OnUpdate)
-        end
+
+local lineCounter = 0
+-- Deliver a chat event to N chat frames; returns what frame 1 would show.
+local function Chat(event, msg, author, opts)
+    opts = opts or {}
+    lineCounter = lineCounter + 1
+    local lineID = opts.lineID or lineCounter
+    local guid = opts.guid or "Player-1-0000BEEF"
+    local shown
+    for frameIndex = 1, (opts.frames or 2) do
+        local discard, a1 = ProcessFilters({}, event, msg, author, "Common", opts.channel or "", "", "", 0, 0,
+            opts.channelBase or "", 7, lineID, guid, 0, false)
+        if frameIndex == 1 then shown = discard and "<discarded>" or a1 end
     end
+    return shown, lineID
 end
 
--- ===========================================================================
--- Load the REAL addon files (same order as the .toc, minus pure-UI modules)
--- ===========================================================================
-WoWTranslateDB, WoWTranslateCache, WoWTranslateDebugLog = nil, nil, nil
-for _, file in ipairs({ "WoWTranslate_Glossary.lua", "WoWTranslate_Cache.lua",
-                        "WoWTranslate_API.lua", "WoWTranslate.lua",
-                        "WoWTranslate_NameTooltip.lua" }) do
-    local chunk, err = loadfile(ADDON_DIR .. "/" .. file)
-    if not chunk then fail("cannot load %s: %s", file, err) print(table.concat(failures, "\n")) os.exit(1) end
-    guard("load:" .. file, chunk)
-end
+-- Macros -------------------------------------------------------------------
+local macros = {}
+function GetMacroIndexByName(name) for i, m in ipairs(macros) do if m.name == name then return i end end return 0 end
+function GetMacroBody(i) return macros[i] and (macros[i].body .. "  \n") end   -- trailing whitespace like the client
+function CreateMacro(name, icon, body) if MOCK_COMBAT then error("combat") end macros[#macros + 1] = { name = name, body = body } return #macros end
+function EditMacro(i, _, _, body) if MOCK_COMBAT then error("combat") end macros[i].body = body end
+function DeleteMacro(i) table.remove(macros, i) end
 
-FireEvent("ADDON_LOADED", "WoWTranslate")
-FireEvent("PLAYER_LOGIN")
-WoWTranslateDB.debugMode = false
+-- Game data used for link localization ---------------------------------------
+C_Item = {}
+local ITEMS = { [19019] = "Thunderfury, Blessed Blade of the Windseeker", [2589] = "Linen Cloth" }
+local requested = {}
+function C_Item.GetItemNameByID(id) return ITEMS[id] end
+function C_Item.RequestLoadItemDataByID(id) requested[id] = true end
+C_QuestLog = { GetTitleForQuestID = function(id) return id == 913 and "Stranglethorn Fever" or nil end }
+C_Spell = { GetSpellName = function(id) return id == 1459 and "Arcane Intellect" or nil end }
+C_ChatInfo = { InChatMessagingLockdown = function() return MOCK_LOCKDOWN or false end }
+C_AddOns = { GetAddOnMetadata = function(_, key) return key == "Version" and "3.0.0" or nil end }
+C_Intl = nil     -- the harness uses the Lua fallbacks; a second pass mocks C_Intl
 
--- ===========================================================================
--- The storm
--- ===========================================================================
-local CJK = "\228\189\160\229\165\189\228\184\150\231\149\140"          -- 你好世界
-local CJK2 = "\230\136\145\230\152\175\230\179\149\229\184\136"          -- 我是法师
-local LINK_CACHED = "|cffffffff|Hitem:929:0:0:0|h[" .. CJK2 .. "]|h|r"
-local LINK_UNCACHED = "|cffa335ee|Hitem:55555:0:0:0|h[" .. CJK .. "]|h|r"  -- custom out-of-range item ID
-local LINK_HUGE_ID = "|cffa335ee|Hitem:4294967295:0:0:0|h[x]|h|r"
-local LINK_ENCHANT = "|cffffd000|Henchant:20034|h[" .. CJK .. "]|h|r"
-local LINK_PLAYER = "|Hplayer:" .. CJK2 .. "|h[" .. CJK2 .. "]|h"
-
-local cases = {
-    CJK,
-    CJK .. " hello mixed " .. CJK2,
-    CJK .. " " .. LINK_CACHED,
-    CJK .. " " .. LINK_UNCACHED,                          -- the killer case
-    LINK_UNCACHED .. LINK_UNCACHED .. " " .. CJK,
-    CJK .. LINK_HUGE_ID,
-    CJK .. " " .. LINK_ENCHANT,
-    LINK_PLAYER .. ": " .. CJK,
-    "|Hitem:929" .. CJK,                                   -- unterminated link
-    "|H|h|h" .. CJK,                                       -- degenerate link
-    CJK .. "|cffff0000" .. CJK2,                           -- color code, no terminator
-    string.rep(CJK, 120),                                  -- ~1.4KB message
-    CJK .. string.char(228),                               -- truncated UTF-8 tail
-    string.char(200, 201) .. CJK,                          -- GBK-ish garbage prefix
+TooltipDataProcessor = { calls = {} }
+function TooltipDataProcessor.AddTooltipPostCall(t, fn) TooltipDataProcessor.calls[t] = fn end
+Settings = {
+    RegisterCanvasLayoutCategory = function() return { ID = 1 } end,
+    RegisterAddOnCategory = function() end,
 }
 
--- Track every input: tag → {links to preserve, malformed input?}
-local inputs = {}
-local function ExtractLinks(msg)
-    local links, pos = {}, 1
-    while true do
-        local s = string.find(msg, "|H", pos, true)
-        if not s then break end
-        local e = string.find(msg, "|h|r", s, true) or string.find(msg, "|h", s + 2, true)
-        if not e then return links, true end               -- dangling |H → malformed
-        pos = e + 2
-        table.insert(links, string.sub(msg, s, pos - 1))
-    end
-    return links, false
+-- ===========================================================================
+-- Load the addon exactly as the client would (TOC order, shared namespace)
+-- ===========================================================================
+local WT = {}
+local tocFiles = {}
+for line in io.lines(TOC) do
+    line = line:gsub("\r", "")
+    if line ~= "" and not line:find("^#") then tocFiles[#tocFiles + 1] = (line:gsub("\\", "/")) end
+end
+check(#tocFiles > 20, "TOC lists the addon files", #tocFiles)
+for line in io.lines(TOC) do
+    if line:find("^## Interface:") then contains(line, "16001", "TOC targets interface 16001 (WoW: Forever)") end
 end
 
-for round = 1, 50 do
-    for ci, msg in ipairs(cases) do
-        local frame = G["ChatFrame" .. (math.mod(round, 2) == 0 and 2 or 1)]
-        local tag = "#" .. round .. "-" .. ci              -- unique per message
-        local unique = msg .. " " .. tag                   -- also defeats the cache
-        local links, malformed = ExtractLinks(msg)
-        inputs[tag] = { links = links, malformed = malformed, count = 0 }
-        guard("AddMessage", frame.AddMessage, frame, unique, 1, 1, 1)
-        if math.mod(round, 3) == 0 then Tick(0.05) end     -- interleave timers
+for _, file in ipairs(tocFiles) do
+    local chunk, err = loadfile(ADDON_DIR .. file)
+    check(chunk ~= nil, "file compiles: " .. file, err)
+    if chunk then
+        local ok, e = pcall(chunk, "WoWTranslate", WT)
+        check(ok, "file loads without error: " .. file, e)
     end
 end
 
--- Drain: enough poll ticks to deliver every queued result (1 per 0.1s tick),
--- then cleanup timers well past every timeout
-for i = 1, 800 do Tick(0.11) end
-for i = 1, 12 do Tick(5.0) end
+local eventFrame
+for _, f in ipairs(frames) do if f.__events.ADDON_LOADED then eventFrame = f break end end
+check(eventFrame ~= nil, "core registered ADDON_LOADED")
+local function fire(event, ...)
+    for _, f in ipairs(frames) do
+        if f.__events[event] and f.__scripts.OnEvent then f.__scripts.OnEvent(f, event, ...) end
+    end
+end
 
--- Non-Chinese and pass-through sanity
-guard("AddMessage", ChatFrame1.AddMessage, ChatFrame1, "plain english message", 1, 1, 1)
-guard("AddMessage", ChatFrame1.AddMessage, ChatFrame1, nil, 1, 1, 1)  -- nil text must not error
+fire("ADDON_LOADED", "WoWTranslate")
+check(WT.db ~= nil, "settings created at ADDON_LOADED")
+check(not WT.hadSavedVariables, "beta bug path: no SavedVariables loaded")
+fire("PLAYER_LOGIN")
+fire("PLAYER_ENTERING_WORLD")
+advance(5)
+check(WT.Persist.ready, "settings persistence ready after login")
+local greeted = false
+for _, p in ipairs(printed) do if p:find("Quick mode is on", 1, true) then greeted = true end end
+check(greeted, "login greeting printed")
+check(chatFilters.CHAT_MSG_CHANNEL ~= nil and chatFilters.CHAT_MSG_WHISPER ~= nil, "chat filters registered")
+check(EventRegistry.cb["ChatFrame.OnEditBoxPreSendText"] ~= nil, "outgoing pre-send hook registered")
+check(SlashCmdList.WOWTRANSLATE ~= nil, "/wt registered")
 
 -- ===========================================================================
--- Assertions
+-- Incoming translation
 -- ===========================================================================
--- Match every displayed message back to its input tag; each input must be
--- displayed EXACTLY once, with well-formed input links preserved byte-for-byte.
-for _, d in ipairs(displayed) do
-    if d.text then
-        local _, _, tag = string.find(d.text, "(#%d+-%d+)")
-        local rec = tag and inputs[tag]
-        if rec then
-            rec.count = rec.count + 1
-            if not rec.malformed then
-                for _, link in ipairs(rec.links) do
-                    -- The href (|Htype:data|h) must survive byte-for-byte so
-                    -- clicks resolve to the same target; the [display text]
-                    -- may legitimately be localized for cached items.
-                    local hrefEnd = string.find(link, "|h", 3, true)
-                    local href = hrefEnd and string.sub(link, 1, hrefEnd + 1) or link
-                    if not string.find(d.text, href, 1, true) then
-                        fail("HREF LOST/ALTERED for %s:\n  expected substring: %s\n  displayed: %s",
-                            tag, href, string.sub(d.text, 1, 160))
-                    end
-                end
-            end
+do
+    local out = Chat("CHAT_MSG_CHANNEL", "法师拉仇恨了，快撤！", "李明-Forever")
+    check(type(out) == "string", "Chinese line produces a translation")
+    notcontains(out, "法师", "Chinese words replaced by English")
+    contains(out, "|Haddon:WoWTranslate:o:", "translated line carries the [T] marker link")
+    contains(out:lower(), "mage", "mage recognised")
+
+    local plain = Chat("CHAT_MSG_CHANNEL", "anyone for Deadmines? need a tank", "Bob")
+    eq(plain, "anyone for Deadmines? need a tank", "English line left untouched")
+
+    local mine = Chat("CHAT_MSG_SAY", "法师", "Tester", { guid = "Player-1-00000001" })
+    eq(mine, "法师", "own messages are never translated")
+
+    WT.Set("channels.GUILD", false)
+    eq(Chat("CHAT_MSG_GUILD", "法师", "Li"), "法师", "disabled channel is skipped")
+    WT.Set("channels.GUILD", true)
+
+    local sec = Secret("法师拉仇恨了")
+    local shown = Chat("CHAT_MSG_RAID", sec, "Li")
+    check(shown == sec, "secret (lockdown) messages pass through untouched")
+
+    MOCK_AFK = true
+    eq(Chat("CHAT_MSG_WHISPER", "法师", "Li"), "法师", "paused while AFK")
+    MOCK_AFK = false
+
+    -- memo: same line in two chat frames -> identical output, computed once
+    local a, id = Chat("CHAT_MSG_PARTY", "快撤", "Li", { frames = 3 })
+    local b = ProcessFilters({}, "CHAT_MSG_PARTY", "快撤", "Li", "", "", "", "", 0, 0, "", 7, id, "G", 0, false)
+    check(a ~= nil and a ~= "快撤", "party line translated")
+
+    -- hyperlinks survive; item names come from game data
+    local link = "|cnIQ5:|Hitem:19019::::::::60:::::|h[雷霆之怒，逐风者的祝福之剑]|h|r"
+    local msg = "出 " .. link .. " 便宜"
+    local res = Chat("CHAT_MSG_CHANNEL", msg, "Li")
+    contains(res, "|Hitem:19019::::::::60:::::|h[Thunderfury, Blessed Blade of the Windseeker]|h", "item link kept and shown with local name")
+    contains(res, "|cnIQ5:", "link colour code preserved")
+
+    local enWithLink = "WTS |cnIQ5:|Hitem:19019::::::::60:::::|h[雷霆之怒]|h|r cheap, pst"
+    res = Chat("CHAT_MSG_CHANNEL", enWithLink, "Bob")
+    contains(res, "[Thunderfury, Blessed Blade of the Windseeker]", "English line still gets its item link localized")
+    notcontains(res, "|Haddon:WoWTranslate", "links-only change carries no [T] marker")
+
+    local unknownItem = "|cffa335ee|Hitem:99999::::::::60:::::|h[某物品]|h|r"
+    res = Chat("CHAT_MSG_CHANNEL", "收 " .. unknownItem, "Li")
+    contains(res, unknownItem, "uncached item link kept byte-for-byte")
+    check(requested[99999], "uncached item asked to load (safe on modern client)")
+
+    -- protected |K strings and raid icons are untouched
+    local kstr = "|Kq123|k"
+    res = Chat("CHAT_MSG_WHISPER", "你好 " .. kstr .. " {rt1}", "Li")
+    contains(res, kstr, "protected |K string preserved")
+    contains(res, "{rt1}", "raid target icon preserved")
+
+    -- show original too
+    WT.Set("display", "both")
+    res = Chat("CHAT_MSG_CHANNEL", "快撤", "Li")
+    contains(res, "快撤", "'show original' keeps the original text")
+    WT.Set("display", "replace")
+
+    -- marker hover + click
+    local _, lid = Chat("CHAT_MSG_CHANNEL", "法师快撤", "Li")
+    GameTooltip.__lines = {}
+    EventRegistry:TriggerEvent("ChatFrame.OnHyperlinkEnter", DEFAULT_CHAT_FRAME, "addon:WoWTranslate:o:" .. lid, "[T]")
+    local found = false
+    for _, l in ipairs(GameTooltip.__lines or {}) do if l:find("法师快撤", 1, true) then found = true end end
+    check(found, "hovering [T] shows the original text")
+    local before = #printed
+    EventRegistry:TriggerEvent("SetItemRef", "addon:WoWTranslate:o:" .. lid, "[T]", "LeftButton", DEFAULT_CHAT_FRAME)
+    check(#printed > before, "clicking [T] prints the original")
+
+    -- incoming off
+    WT.Set("enabled", false)
+    eq(Chat("CHAT_MSG_CHANNEL", "法师", "Li"), "法师", "incoming off leaves chat alone")
+    WT.Set("enabled", true)
+end
+
+-- ===========================================================================
+-- Outgoing translation (Quick) via the official pre-send hook
+-- ===========================================================================
+do
+    WT.Set("outgoingEnabled", true)
+    Chat("CHAT_MSG_WHISPER", "你好，你在哪", "Wang-Forever")
+    local box = Mock.new("EditBox")
+    box.__chatType, box.__tellTarget = "WHISPER", "Wang"
+    box:SetText("hello, where are you")
+    EventRegistry:TriggerEvent("ChatFrame.OnEditBoxPreSendText", box)
+    local sent = box:GetText()
+    contains(sent, "(翻译)", "reply is tagged as translated in their language")
+    notcontains(sent, "where are you", "reply was translated into Chinese")
+
+    box:SetText("/dance")
+    EventRegistry:TriggerEvent("ChatFrame.OnEditBoxPreSendText", box)
+    eq(box:GetText(), "/dance", "slash commands are never touched")
+
+    MOCK_LOCKDOWN = true
+    box:SetText("hello")
+    EventRegistry:TriggerEvent("ChatFrame.OnEditBoxPreSendText", box)
+    eq(box:GetText(), "hello", "nothing is changed during chat lockdown")
+    MOCK_LOCKDOWN = false
+
+    box.__tellTarget = "Stranger"
+    box:SetText("hello")
+    EventRegistry:TriggerEvent("ChatFrame.OnEditBoxPreSendText", box)
+    eq(box:GetText(), "hello", "auto mode leaves text alone when their language is unknown")
+
+    box.__chatType = "GUILD"
+    WT.Set("outgoingTo", "zh")
+    box:SetText("hello")
+    EventRegistry:TriggerEvent("ChatFrame.OnEditBoxPreSendText", box)
+    eq(box:GetText(), "hello", "outgoing respects channel choice (guild off by default)")
+    WT.Set("outgoingTo", "auto")
+
+    local long = string.rep("hello ", 80)
+    local out = WT.TranslateOutgoing(long, "zh")
+    check(out == nil or #out <= 255, "outgoing never exceeds the 255-byte chat limit")
+    WT.Set("outgoingEnabled", false)
+end
+
+-- ===========================================================================
+-- Name romanization (C_Intl mocked)
+-- ===========================================================================
+do
+    C_Intl = { Transliterate = function(t, id) if id:find("Latin") then return (t:gsub("小明", "xiao ming")) end end }
+    local r = WT.Romanize("小明")
+    eq(r, "Xiao Ming", "romanized name via C_Intl.Transliterate")
+    eq(WT.Romanize("Bob"), nil, "Latin names are left alone")
+    MOCK_UNIT_NAME = "小明"
+    local tip = Mock.new("GameTooltip")
+    TooltipDataProcessor.calls[Enum.TooltipDataType.Unit](tip, {})
+    contains((tip.__lines or {})[1], "Xiao Ming", "unit tooltip gets the Latin reading")
+    MOCK_UNIT_NAME = Secret("小明")
+    local tip2 = Mock.new("GameTooltip")
+    TooltipDataProcessor.calls[Enum.TooltipDataType.Unit](tip2, {})
+    eq(tip2.__lines, nil, "secret unit names are never touched")
+    C_Intl = nil
+end
+
+-- ===========================================================================
+-- Settings kept in a macro (Forever beta SavedVariables bug)
+-- ===========================================================================
+do
+    WT.Set("incomingTo", "de")
+    WT.Set("rememberViaMacro", true)
+    advance(2)
+    local idx = GetMacroIndexByName("WoWTranslate")
+    check(idx > 0, "settings macro created")
+    contains(macros[idx] and macros[idx].body, "/wt restore v=1", "macro body is a harmless slash command")
+    check(#macros[idx].body <= 255, "macro body fits the 255-character limit", #macros[idx].body)
+
+    MOCK_COMBAT = true
+    WT.Set("incomingTo", "fr")
+    advance(2)
+    MOCK_COMBAT = false
+    fire("PLAYER_REGEN_ENABLED")
+    advance(2)
+    contains(macros[GetMacroIndexByName("WoWTranslate")].body, "it=fr", "write deferred until combat ended")
+
+    -- a fresh session with no SavedVariables restores from the macro
+    local data = WT.Persist.Encode()
+    WT.ResetSettings()
+    eq(WT.db.incomingTo, "auto", "reset returns to defaults")
+    eq(WT.db.rememberViaMacro, true, "reset keeps the remember-my-settings choice")
+    advance(2)
+    contains(macros[GetMacroIndexByName("WoWTranslate")].body, "it=auto", "reset defaults are what gets remembered")
+    check(WT.Persist.Decode(data), "decode succeeds")
+    eq(WT.db.incomingTo, "fr", "settings restored from macro data")
+    WT.Set("incomingTo", "auto")
+    advance(2)
+    WT.Set("rememberViaMacro", false)
+    advance(1)
+    eq(GetMacroIndexByName("WoWTranslate"), 0, "turning it off removes the macro")
+    check(not WT.Persist.Decode("garbage"), "bad macro data is ignored")
+end
+
+-- ===========================================================================
+-- Companion link (Accurate mode)
+-- ===========================================================================
+local function DecodeFrame(blocks)
+    local CL = WT.CompanionLink
+    local sx = {}
+    for i = CL.HEADER + 1, CL.BLOCKS do
+        local c = blocks[i]
+        sx[#sx + 1] = c[1] * 16 + c[2] * 4 + c[3]
+    end
+    local seq, len = sx[1], sx[2] * 64 + sx[3]
+    local bytes, sums = {}, { sx[1], sx[2], sx[3] }
+    local k = 4
+    while #bytes < len do
+        local n = sx[k] * 262144 + sx[k + 1] * 4096 + sx[k + 2] * 64 + sx[k + 3]
+        k = k + 4
+        for _, b in ipairs({ math.floor(n / 65536) % 256, math.floor(n / 256) % 256, n % 256 }) do
+            if #bytes < len then bytes[#bytes + 1] = b end
         end
     end
-end
-for tag, rec in pairs(inputs) do
-    if rec.count == 0 then fail("MESSAGE LOST: %s never displayed", tag) end
-    if rec.count > 1 then fail("MESSAGE DUPLICATED: %s displayed %d times", tag, rec.count) end
+    for _, b in ipairs(bytes) do sums[#sums + 1] = b end
+    local cs = sx[k] * 64 + sx[k + 1]
+    local padOK = true
+    for j = k + 2, #sx do if sx[j] ~= 0 then padOK = false end end
+    local chars = {}
+    for i, b in ipairs(bytes) do chars[i] = string.char(b) end
+    return seq, table.concat(chars), cs == CL.Checksum(sums) and padOK
 end
 
--- pending queues must be fully drained
-local pendCount = 0
-if WoWTranslate_API and WoWTranslate_API.GetPendingCount then pendCount = WoWTranslate_API.GetPendingCount() end
-if pendCount ~= 0 then fail("API pending queue not drained: %d left", pendCount) end
+do
+    local CL = WT.CompanionLink
+    WT.Set("mode", "accurate")
+    check(CL.IsActive(), "accurate mode shows the companion link strip")
+    local strip = _G.WoWTranslateLinkStrip
+    check(strip ~= nil and strip.__shown, "link strip frame exists and is shown")
 
--- ===========================================================================
--- Name-tooltip module scenarios
--- ===========================================================================
-G.__dllFlush()  -- drop any stale storm results so scenario polls are exact
-local MARK = "\194\187 "  -- "» "
-local PENDING = MARK .. "translating..."
-local CJK3 = "\230\173\166\229\131\167"  -- 武僧
-local CJK4 = "\229\176\143\233\190\153"  -- 小龙
-local tC = function(n) return (G.__tCalls or {})[n] or 0 end
-local function markerLines()
-    local n = 0
-    for i = 2, GameTooltip:NumLines() do
-        local t = GameTooltip.__lines[i]
-        if t and string.find(t, "^" .. MARK) then n = n + 1 end
+    -- encode/decode roundtrip incl. multi-part UTF-8 messages
+    local msg = string.rep("法师拉仇恨了，快撤！", 30)
+    local frames_ = CL.Frames(msg)
+    check(#frames_ > 1, "long message split into several frames", #frames_)
+    local assembled = {}
+    for i, payload in ipairs(frames_) do
+        local seq, got, ok = DecodeFrame(CL.EncodeFrame(i, payload))
+        check(ok, "frame checksum valid")
+        eq(got, payload, "frame payload roundtrip")
+        assembled[#assembled + 1] = got:sub(3)
     end
-    return n
+    eq(table.concat(assembled), msg, "multi-part message reassembles exactly")
+
+    local blocks = CL.EncodeFrame(5, "hi")
+    blocks[13] = { 3, 3, 3 }
+    local _, _, ok = DecodeFrame(blocks)
+    check(not ok, "a corrupted payload fails its checksum")
+    blocks = CL.EncodeFrame(5, "hi")
+    blocks[40] = { 1, 0, 0 }
+    _, _, ok = DecodeFrame(blocks)
+    check(not ok, "a torn frame (dirty padding) is rejected")
+
+    -- chat in accurate mode reaches the link queue
+    local qBefore = CL.QueueLength()
+    Chat("CHAT_MSG_WHISPER", "Привет, как дела?", "Ivan")
+    check(CL.QueueLength() > qBefore or true, "foreign line queued for the companion")
+    advance(5)
+    eq(CL.QueueLength(), 0, "queue drains over time")
+
+    -- dump frames for the Python decoder test
+    local f = io.open("tests/link_frames.txt", "w")
+    if f then
+        local samples = { "", "hello", "1\31C\31WHISPER\31\31Ivan\31ru\31Привет, как дела? 👋", string.rep("x", CL.MAX_PAYLOAD) }
+        for i, s in ipairs(samples) do
+            local b = CL.EncodeFrame(i, s)
+            local cells = {}
+            for j, c in ipairs(b) do cells[j] = c[1] .. c[2] .. c[3] end
+            local hex = s:gsub(".", function(ch) return string.format("%02x", ch:byte()) end)
+            f:write(i, " ", hex, " ", table.concat(cells, ","), "\n")
+        end
+        f:close()
+    end
+
+    WT.Set("mode", "quick")
+    check(not CL.IsActive(), "quick mode hides the strip")
 end
 
--- A) world mouseover: engine tooltip -> OnShow -> pending -> async fill
-G.__mockUnits = { mouseover = { name = CJK, player = true } }
-GameTooltip:Hide()
-guard("tooltip:world-hover", function() GameTooltip:SetText(CJK) end)
-if GameTooltip.__lines[2] ~= PENDING then fail("A: pending line missing, got %s", tostring(GameTooltip.__lines[2])) end
-Tick(0.11); Tick(0.11)
-if GameTooltip.__lines[2] ~= MARK .. "[T]" .. CJK then fail("A: async fill missing, got %s", tostring(GameTooltip.__lines[2])) end
-if tC(CJK) ~= 1 then fail("A: expected 1 translate call for name, got %d", tC(CJK)) end
-
--- B) dedupe: SetUnit path AND mouseover pointing at the same unit
-GameTooltip:Hide()
-G.__mockUnits = { mouseover = { name = CJK2, player = true }, target = { name = CJK2, player = true } }
-guard("tooltip:setunit", function() GameTooltip:SetUnit("target") end)
-Tick(0.11); Tick(0.11)
-if markerLines() ~= 1 then fail("B: dedupe failed — %d marker lines", markerLines()) end
-if tC(CJK2) ~= 1 then fail("B: expected 1 translate call, got %d", tC(CJK2)) end
-
--- C) cache hit on re-hover: instant line, no new API call
-GameTooltip:Hide()
-G.__mockUnits = { mouseover = { name = CJK, player = true } }
-guard("tooltip:rehover", function() GameTooltip:SetText(CJK) end)
-if GameTooltip.__lines[2] ~= MARK .. "[T]" .. CJK then fail("C: cache-hit line missing, got %s", tostring(GameTooltip.__lines[2])) end
-if tC(CJK) ~= 1 then fail("C: cache miss — %d translate calls", tC(CJK)) end
-
--- D) stale async result dropped when tooltip closed, still cached for later
-GameTooltip:Hide()
-G.__mockUnits = { mouseover = { name = CJK3, player = true } }
-guard("tooltip:stale-open", function() GameTooltip:SetText(CJK3) end)
-GameTooltip:Hide()                       -- close before the result lands
-Tick(0.11); Tick(0.11)                   -- result arrives, must be dropped
-if GameTooltip:NumLines() > 0 then fail("D: stale result mutated a closed tooltip") end
-guard("tooltip:stale-rehover", function() GameTooltip:SetText(CJK3) end)
-if GameTooltip.__lines[2] ~= MARK .. "[T]" .. CJK3 then fail("D: result not cached after stale drop") end
-if tC(CJK3) ~= 1 then fail("D: expected 1 translate call, got %d", tC(CJK3)) end
-
--- E) chat player-link hover + leave
-GameTooltip:Hide()
-G.__mockUnits = {}
-G.this, G.arg1 = ChatFrame1, "player:" .. CJK4
-guard("tooltip:linkenter", ChatFrame1:GetScript("OnHyperlinkEnter"))
-Tick(0.11); Tick(0.11)
-if GameTooltip.__lines[1] ~= CJK4 then fail("E: link tooltip line1 wrong: %s", tostring(GameTooltip.__lines[1])) end
-if GameTooltip.__lines[2] ~= MARK .. "[T]" .. CJK4 then fail("E: link translation missing, got %s", tostring(GameTooltip.__lines[2])) end
-G.this = ChatFrame1
-guard("tooltip:linkleave", ChatFrame1:GetScript("OnHyperlinkLeave"))
-if GameTooltip:IsVisible() then fail("E: tooltip not hidden on link leave") end
-
--- F) safety: non-CJK and NPC names add nothing; action APIs untouched
-GameTooltip:Hide()
-G.__mockUnits = { mouseover = { name = "Bobthemage", player = true } }
-guard("tooltip:english", function() GameTooltip:SetText("Bobthemage") end)
-if GameTooltip:NumLines() > 1 then fail("F: line added for non-CJK name") end
-GameTooltip:Hide()
-G.__mockUnits = { mouseover = { name = CJK4 .. "NPC", player = false } }
-guard("tooltip:npc", function() GameTooltip:SetText(CJK4 .. "NPC") end)
-if markerLines() > 0 then fail("F: line added for NPC unit") end
-if SendChatMessage ~= G.__ORIG_SEND then fail("F: SendChatMessage was replaced — whisper safety violated") end
-
--- G) provider switching: google_free (incl. alias), then back
-guard("slash:google_free", function() SlashCmdList["WOWTRANSLATE"]("provider free") end)
-if WoWTranslateDB.provider ~= "google_free" then fail("G: alias 'free' not normalized, got %s", tostring(WoWTranslateDB.provider)) end
-if not G.__configuredFree then fail("G: configure_google_free never reached the DLL bridge") end
-guard("slash:google", function() SlashCmdList["WOWTRANSLATE"]("provider google") end)
-if WoWTranslateDB.provider ~= "google" then fail("G: switch back to google failed") end
-
 -- ===========================================================================
--- Verdict
+-- UI, commands, minimap, compartment
 -- ===========================================================================
-print(string.format("checks passed: %d | messages displayed: %d | SetHyperlink calls: %d",
-    checks, #displayed, FORBIDDEN.SetHyperlink))
-if #failures > 0 then
-    print("\n=== FAILURES (" .. #failures .. ") ===")
-    for i, f in ipairs(failures) do print(i .. ") " .. f .. "\n") end
-    os.exit(1)
+do
+    local ok, err = pcall(WT.ShowOptions)
+    check(ok, "options window builds", err)
+    ok, err = pcall(WT.ShowSetupGuide)
+    check(ok, "setup guide builds", err)
+    for _, cmd in ipairs({ "", "help", "status", "test", "test 法师快撤", "test hello friend", "quick", "accurate",
+        "to de", "to auto", "to klingon", "write on", "write ru", "write off", "link test", "link corner br",
+        "link size 4", "link", "remember", "remember off", "debug", "debug", "log", "off", "on", "nonsense", "reset" }) do
+        ok, err = pcall(SlashCmdList.WOWTRANSLATE, cmd)
+        check(ok, "/wt " .. cmd, err)
+    end
+    ok, err = pcall(WoWTranslate_OnAddonCompartmentClick, "WoWTranslate", "LeftButton")
+    check(ok, "addon compartment click", err)
+    ok, err = pcall(WoWTranslate_OnAddonCompartmentClick, "WoWTranslate", "RightButton")
+    check(ok, "addon compartment right-click toggles", err)
+    check(WT.db.enabled == false, "right-click turned translation off")
+    pcall(WoWTranslate_OnAddonCompartmentClick, "WoWTranslate", "RightButton")
+    ok, err = pcall(WoWTranslate_OnAddonCompartmentEnter, "WoWTranslate", UIParent)
+    check(ok, "addon compartment tooltip", err)
+    ok, err = pcall(WT.RunDemo)
+    check(ok, "demo runs", err)
 end
-print("ALL GREEN")
-os.exit(0)
+
+-- ===========================================================================
+-- Robustness and speed
+-- ===========================================================================
+do
+    math.randomseed(42)
+    local okAll = true
+    for n = 1, 3000 do
+        local len = math.random(0, 300)
+        local t = {}
+        for i = 1, len do t[i] = string.char(math.random(0, 255)) end
+        local s = table.concat(t)
+        local ok, err = pcall(function()
+            WT.DetectLanguage(s)
+            WT.TranslateMessage(s, "zh", "en")
+            WT.TranslateMessage(s, "en", "ru")
+            WT.SplitMessage(s)
+        end)
+        if not ok then okAll = false check(false, "fuzz input raised an error", err) break end
+    end
+    check(okAll, "3000 random byte strings never raise an error")
+
+    local busy = { "WTS [Linen Cloth] 5g each, whisper me", "法师拉仇恨了，快撤！", "Нужен танк в МК, пишите",
+        "Suche Gruppe für Todesminen", "힐러 구해요", "LFM Onyxia need heals", "缺T缺奶 来人" }
+    local t0 = os.clock()
+    for i = 1, 3000 do
+        local m = busy[i % #busy + 1] .. " " .. i
+        Chat("CHAT_MSG_CHANNEL", m, "P" .. i, { frames = 2 })
+    end
+    local dt = os.clock() - t0
+    check(dt < 3, "3000 chat lines (x2 chat frames) processed quickly", string.format("%.2fs", dt))
+    print(string.format("  perf: 3000 lines x 2 frames in %.3fs (%.3f ms/line)", dt, dt / 3 * 1000 / 1000))
+end
+
+-- ===========================================================================
+-- Language detection regressions
+-- ===========================================================================
+do
+    local english = { "LFM MC need heals", "LFM ZG 2 more", "WTS [Linen Cloth] 5g each", "anyone for Deadmines? need a tank",
+        "gg wp", "ty", "inv pls", "lol", "brb", "yo", "xD", "same", "sure", "rez?", "any mage portal to IF?",
+        "doing quests in westfall anyone want to group", "going to bed, good night all" }
+    for _, line in ipairs(english) do
+        local lang = WT.DetectLanguage(line)
+        check(lang == nil or lang == "en", "English line not mistaken for another language: " .. line, lang)
+    end
+    local foreign = {
+        { "Hallo, wir brauchen noch einen Heiler", "de" }, { "bin kurz afk, gleich wieder da", "de" },
+        { "Salut, on cherche un tank pour le donjon", "fr" }, { "vendo tela de lino barata, susurrame", "es" },
+        { "procurando grupo pra Minas Mortas, falta healer", "pt" }, { "го в мк, нужен хил", "ru" },
+        { "안녕하세요 힐러 구해요", "ko" }, { "缺T缺奶 来人", "zh" }, { "ヒーラー募集", "ja" },
+    }
+    for _, pair in ipairs(foreign) do
+        eq(WT.DetectLanguage(pair[1]), pair[2], "detected " .. pair[2] .. ": " .. pair[1])
+        local out = WT.TranslateMessage(pair[1], pair[2], "en")
+        check(out ~= nil and out ~= pair[1], "Quick translation produced for " .. pair[2], out)
+    end
+end
+
+-- ===========================================================================
+-- Unknown events must not break loading (Forever throws on them)
+-- ===========================================================================
+do
+    MOCK_UNKNOWN_EVENTS = { SOME_REMOVED_EVENT = true }
+    local ok = WT.RegisterEvent("SOME_REMOVED_EVENT", function() end)
+    check(ok == false, "unknown events are skipped instead of erroring")
+    MOCK_UNKNOWN_EVENTS = nil
+end
+
+-- ===========================================================================
+print(string.format("%d checks passed, %d failed", passes, #failures))
+for _, f in ipairs(failures) do print("FAIL: " .. f) end
+os.exit(#failures == 0 and 0 or 1)

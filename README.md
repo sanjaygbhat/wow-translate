@@ -1,472 +1,241 @@
-# WoWTranslate 2.0
+# WoW Translate
+
+**Read and write chat in other languages in World of Warcraft: Forever.**
+
+Someone whispers you in Russian, the trade channel is full of Chinese, your new guildmate only speaks Spanish. WoW Translate turns those messages into your language, right in your chat window. It can also translate what you write, so you can answer them.
 
 <p align="center">
-  <strong>Real-time chat translation for World of Warcraft 1.12</strong><br>
-  Local provider keys, direct HTTPS translation, and no WoWTranslate-hosted server
-</p>
-
-<p align="center">
-  <img src="https://img.shields.io/badge/WoW-1.12-blue" alt="WoW 1.12">
-  <img src="https://img.shields.io/badge/version-2.0-green" alt="Version 2.0">
-  <img src="https://img.shields.io/github/license/sanjaygbhat/wow-translate" alt="License">
-  <img src="https://img.shields.io/badge/server-not%20required-brightgreen" alt="No server required">
-  <img src="https://img.shields.io/badge/providers-Google%20%7C%20OpenAI%20%7C%20Custom-informational" alt="Google, OpenAI-compatible, and custom providers">
-  <img src="https://img.shields.io/badge/LibreTranslate-custom%20HTTPS-orange" alt="LibreTranslate through the custom HTTPS provider">
-  <a href="https://github.com/sponsors/sanjaygbhat"><img src="https://img.shields.io/badge/%E2%9D%A4%20Sponsor-ea4aaa?logo=githubsponsors&logoColor=white" alt="Sponsor sanjaygbhat on GitHub"></a>
+  <img src="https://img.shields.io/badge/WoW-Forever-blue" alt="WoW: Forever">
+  <img src="https://img.shields.io/badge/version-3.0.0-green" alt="Version 3.0.0">
+  <img src="https://img.shields.io/github/license/sanjaygbhat/wow-translate" alt="MIT License">
+  <a href="https://github.com/sponsors/sanjaygbhat"><img src="https://img.shields.io/badge/%E2%9D%A4%20Sponsor-ea4aaa?logo=githubsponsors&logoColor=white" alt="Sponsor"></a>
 </p>
 
 ---
 
-WoWTranslate translates chat for World of Warcraft 1.12 (vanilla) clients.
+## What it looks like
 
-Version 2.0 is two local pieces:
+| Someone writes | You see |
+|---|---|
+| `[Trade] Li: 出 附魔材料 便宜 M我` | `[Trade] [T] Li: WTS enchanting materials cheap whisper me` |
+| `[Whisper] Ivan: го в мк, нужен хил` | `[Whisper] [T] Ivan: Go in Molten Core, need a healer` |
+| `[Party] Klaus: Hallo, wir brauchen noch einen Heiler` | `[Party] [T] Klaus: Hello, we need a healer` |
 
-- A WoW 1.12 Lua addon in `Interface/AddOns/WoWTranslate`
-- A 32-bit Windows DLL, `WoWTranslate.dll`, loaded by the client through `dlls.txt`
+(These are real results from Quick mode, the free mode.)
 
-The DLL calls your configured translation provider directly over HTTPS from your local machine. **It works out of the box with no API key** via Google's free translate endpoint (`google_free`, the default). For heavier use or guaranteed stability, switch to Google Cloud Translation Basic v2 with your own key (`/wt provider google`), an OpenAI-compatible endpoint, or any custom HTTPS provider.
+The small **[T]** means "translated". Point your mouse at it to see the original message. Click it to print the original in chat.
 
-**⭐ The author heavily recommends the Google API Key translation (`/wt provider google`) — it is near perfect and seamless.** The difference is not subtle: **Google Free literally translates the text word-by-word, while the API method gives you the proper translation *in context*** — it understands what players actually mean, and in real chat this makes a huge difference (see the table below). Setup takes ~10 minutes ([guide below](#-get-a-google-api-key)), the free tier of ~500k characters/month covers normal play, and you get Google's best translation model with no rate limits.
+---
 
-> **google_free vs google:** the free endpoint needs zero setup but is unofficial — Google rate-limits it (heavy chat may briefly show untranslated messages), could change it anytime, and serves an older translation model. The keyed `google` provider is the official API: ~500k characters/month free, then paid, never throttled at chat volumes, and noticeably better at gamer language.
+## Two ways to translate
 
-Real side-by-side outputs (same input, both providers, captured live):
+You pick one. You can switch at any time by typing `/wt`.
 
-| Chinese chat | Google Free (`google_free`) | Google with Key (`google`) |
+| | **Quick** (free) | **Accurate** (uses a paid service) |
 |---|---|---|
-| | ***literal translation*** | ***translation in context*** |
-| 法师拉仇恨了，快撤！ | "The mage has drawn **hatred**, retreat quickly!" | "The mage has drawn **aggro**, retreat quickly!" |
-| 萨满快给我加血，我要死了哈哈 | "Shaman, please give me more **blood**, I'm going to die haha" | "Shaman, **heal me!** I'm dying, haha!" |
-| 副本掉落的紫装归需求优先 | "Purple equipment dropped from the dungeon **will be given priority**" | "Purple gear dropped in dungeons should be **prioritized for those in need**" |
+| **How good is it?** | Gives you the general meaning, phrase by phrase. Good for trade chat, group calls and short messages. Often clumsy, sometimes wrong. | Real, natural sentences. Understands slang and context. |
+| **Where do translations show?** | Right in your chat window. | In a small window next to your chat (the WoW Translate Companion app). |
+| **What do I need?** | Nothing. It works as soon as you log in. | The free Companion app on your PC, plus an account with a translation service. |
+| **Does it cost money?** | No. | The services give you a free amount every month, then charge you. Most players stay in the free amount. [See costs](#costs) |
 
-The keyed model knows *aggro*, *heals*, and need-before-greed loot rules; the free model translates word-by-word.
+Here is the same message both ways:
 
----
+| Original (Chinese) | Quick | Accurate |
+|---|---|---|
+| 法师拉仇恨了，快撤！ | Mage pull aggro, fast run away! | The mage has drawn aggro, retreat quickly! |
+| 萨满快给我加血，我要死了哈哈 | Shaman fast heal me, I want dead haha | Shaman, heal me! I'm dying, haha! |
 
-## ✨ Features
-
-| Feature | Description |
-|---------|-------------|
-| 🌍 **Incoming Translation** | Translate incoming chat with language and channel controls. |
-| 💬 **Optional Outgoing Translation** | Translate your own messages before they are sent. Off by default. |
-| 🔌 **Direct Providers** | Use Google Cloud Translation Basic v2, an OpenAI-compatible `/v1/chat/completions` endpoint, or a custom HTTPS JSON service. |
-| 🆓 **No-Key Default** | `google_free` uses Google's free translate endpoint — install and play, zero configuration. |
-| 🆓 **Free LibreTranslate Path** | Use LibreTranslate through the custom HTTPS provider; self-host for a no-billing option. |
-| 🚫 **No Hosted Server** | WoWTranslate 2.0 calls providers directly from your machine; you bring a provider key or HTTPS endpoint you control. |
-| 📚 **WoW Glossary** | Preprocesses common raid, class, item, and server terms before provider translation. |
-| 🔗 **Hyperlink Safe** | Preserves item, quest, player, and other WoW hyperlinks so links stay clickable. |
-| ⚡ **Local Cache** | Repeated translations are served from a persistent local cache instead of calling the provider again. |
-| 🧰 **Flexible Config** | Configure in game with `/wt` commands or keep provider keys in `WoWTranslate.ini` next to the DLL. |
-| 🗺️ **In-Game Panel** | `/wt show` opens the configuration panel for providers, languages, channels, cache, and outgoing settings. |
+**Why can't the addon do accurate translations by itself?** Blizzard doesn't let addons use the internet, and good translation needs a translation service on the internet. So Accurate mode uses a small app that runs next to the game. More on that [below](#accurate-mode).
 
 ---
 
-## 🚀 Quick Start
+## Install
 
-### 1. Download
+**With the CurseForge app (easiest)**
 
-Download the release package from **[GitHub Releases](../../releases)**. The package should contain the addon folder and `WoWTranslate.dll`.
+1. Open CurseForge and choose **World of Warcraft**.
+2. Make sure your game version is **WoW: Forever** (during the beta, pick the Forever beta install).
+3. Search for **WoW Translate** and click **Install**.
 
-### 2. Install on Windows
+**By hand**
 
-Extract the package, then copy the files into your WoW folder:
-
-```text
-YourWoWFolder/
-  WoW.exe
-  WoWTranslate.dll
-  dlls.txt
-  Interface/
-    AddOns/
-      WoWTranslate/
-```
-
-If `dlls.txt` does not exist, create it next to `WoW.exe` and put this line in it:
-
-```text
-WoWTranslate.dll
-```
-
-### 3. Install on macOS/Wine
-
-For macOS/Wine installs, use the helper script from the repo:
-
-```bash
-scripts/install-macos.sh /path/to/your/wow-folder
-```
-
-The script installs the addon, copies `WoWTranslate.dll` if it can find a downloaded or built DLL, and adds `WoWTranslate.dll` to `dlls.txt`.
-
-### 4. Configure In Game
-
-Launch WoW and run:
-
-```text
-/wt provider google
-/wt googlekey YOUR_GOOGLE_CLOUD_TRANSLATION_API_KEY
-/wt test 你好
-```
-
-Open the settings panel anytime with:
-
-```text
-/wt show
-```
+1. Download the latest `WoWTranslate-x.x.x.zip` from [Releases](https://github.com/sanjaygbhat/wow-translate/releases).
+2. Unzip it into your WoW: Forever addons folder, so you end up with a folder called `WoWTranslate` inside `AddOns`:
+   - During the beta this is usually `C:\Program Files (x86)\World of Warcraft\_classic_beta_\Interface\AddOns\`
+3. Restart the game. On the character screen, click **AddOns** and make sure **WoW Translate** is ticked.
 
 ---
 
-## 🔑 Get a Google API Key
+## Getting started
 
-Google Cloud Translation Basic v2 supports API-key authentication. Advanced v3 uses different authentication and is not what WoWTranslate 2.0 targets.
+There's nothing to set up. When you log in you'll see:
 
-1. Open https://console.cloud.google.com/ and sign in.
-2. Click the project selector at the top of the page.
-3. Click `New Project`.
-4. Name it `WoWTranslate`.
-5. Click `Create`.
-6. Make sure the `WoWTranslate` project is selected.
-7. Open `APIs & Services` -> `Library`.
-8. Search for `Cloud Translation API`.
-9. Open `Cloud Translation API`.
-10. Click `Enable`.
-11. Enable billing when Google asks. The API will not work without billing.
-12. Open `APIs & Services` -> `Credentials`.
-13. Click `Create credentials` -> `API key`.
-14. Copy the new API key somewhere temporary.
-15. Open the API key details page.
-16. Under `API restrictions`, choose `Restrict key`.
-17. Select `Cloud Translation API`.
-18. Save.
-19. Optional but recommended: open the Cloud Translation API quotas page and set a low daily character or request cap that matches your budget.
-20. Optional but recommended: set a Google Cloud budget alert for the project.
-21. Launch WoW.
-22. Run `/wt provider google`.
-23. Run `/wt googlekey YOUR_KEY_HERE`.
-24. Run `/wt test 你好`.
-25. If it fails, run `/wt status` and check the provider state and last error.
+> WoW Translate: Quick mode is on. Messages in other languages are translated into English.
+
+From then on, messages in other languages are translated into your game's language.
+
+- Type **`/wt`** (or click the minimap button) to open the options.
+- Click **Try it** in the options to see some example translations.
+- Right-click the minimap button to turn translation on or off quickly.
+
+**Languages it understands:** English, German, French, Spanish, Portuguese, Russian, Korean, Chinese (simplified and traditional) and Japanese. You can translate into any of these.
+
+**The addon itself** is also available in German, French, Spanish, Portuguese, Russian, Korean and Chinese. It uses your game's language automatically.
 
 ---
 
-## 💰 Cost
+## Answering people in their language
 
-WoWTranslate does not sell keys or translation time. Your configured provider bills your own account directly.
+1. Open `/wt` and tick **Translate what I write**.
+2. Leave **Write in** on **Their language (auto)**.
 
-For Google Cloud Translation Basic v2, Google currently lists the first 500,000 characters per month as free, then roughly `$20` per million characters after that. Check the [Google Cloud Translation pricing page](https://cloud.google.com/translate/pricing) for current rates.
+Now, when someone writes to you in Russian, your reply to them is translated into Russian before it's sent. If nobody has written to you in another language, your message is sent exactly as you typed it.
 
-Provider tradeoffs:
+Your message gets a short tag like `(перевод)` at the front, so the other player knows a machine translated it. You can turn the tag off.
 
-| Provider | Best For | Cost and Billing | Setup |
-|----------|----------|------------------|-------|
-| **Google Cloud Translation Basic v2** | Best translation quality and language coverage. | Requires a linked Google Cloud billing account. The first 500,000 characters/month are currently free, then usage is paid. | `/wt provider google` plus a Google Cloud Translation API key. |
-| **OpenAI-compatible** | OpenAI or any service with an OpenAI-style chat completions API. | Requires an OpenAI-style API key. Billing depends on the provider account. | `/wt provider openai` plus endpoint, model, and key. |
-| **LibreTranslate (custom)** | Free, no-billing translation when you self-host. | Free and open-source. Self-host for reliability; public community mirrors can be rate-limited or unreliable. | `/wt provider custom` plus the LibreTranslate endpoint, template, and response path below. |
+Tips for better results:
+- Keep sentences short and simple: "need a tank", "where are you?", "thanks, good run".
+- Quick mode is word-by-word, so long sentences come out rough. For your own messages, the Companion app gives much better results: type your reply there, it translates it and copies it, and you paste it into WoW with **Ctrl+V**.
 
-Ways to keep cost under your control:
-
-- Set a daily quota cap for the Cloud Translation API.
-- Set a Google Cloud budget alert on the project.
-- Leave outgoing translation off unless you need it.
-- Keep the local cache enabled so repeated messages do not call the provider again.
-- Glossary replacements and cache hits are local and do not call the provider.
+You can choose which channels this works in (whispers, party, raid and so on). Guild, yell and trade chat are off by default.
 
 ---
 
-## 🆓 Free Option (No Billing): LibreTranslate
+## Accurate mode
 
-LibreTranslate is free and open-source. WoWTranslate uses it through the existing custom HTTPS JSON provider, so no code changes are needed. The endpoint must be HTTPS because `WoWTranslate.dll` only accepts HTTPS custom endpoints.
+Accurate mode gives you proper translations. It needs two things: the Companion app, and an account with a translation service.
 
-### In-Game Slash Commands
+### 1. Get the Companion app
 
-```text
-/wt provider custom
-/wt customendpoint https://YOUR-LIBRETRANSLATE-HOST/translate
-/wt customtemplate {"q":"{text}","source":"{source}","target":"{target}","format":"text"}
-/wt custompath translatedText
-/wt test 你好
-```
+Download **WoWTranslateCompanion.exe** from [Releases](https://github.com/sanjaygbhat/wow-translate/releases) and run it. There's nothing to install. Windows may warn you that the app is from an unknown publisher: click **More info**, then **Run anyway**.
 
-### WoWTranslate.ini
+The Companion app is for Windows. On a Mac it works only if you run it from the source code (see [the technical guide](docs/TECHNICAL.md)), and screen reading there is still experimental.
 
-Place this in `WoWTranslate.ini` next to `WoWTranslate.dll`:
+### 2. Choose a translation service
 
-```ini
-[provider]
-type=custom
+When the app starts, it asks you to pick one:
 
-[custom]
-endpoint=https://YOUR-LIBRETRANSLATE-HOST/translate
-request_template={"q":"{text}","source":"{source}","target":"{target}","format":"text"}
-response_path=translatedText
-```
+| Service | Quality | Cost |
+|---|---|---|
+| **DeepL** (recommended) | The most natural translations. | Free for 500,000 characters a month, then paid. |
+| **Google Cloud** | Very good. | Free for 500,000 characters a month, then about $20 per million characters. |
+| **OpenAI-compatible** (ChatGPT and similar) | Very good, understands gamer slang well. | Paid per use. |
+| **Google (free, no key)** | Good enough to try things out. | Free, but unofficial: it can slow down or stop working at any time. |
 
-### API Keys
+For DeepL or Google you need a **key**, which is like a password that lets the app use your account. Getting one takes about 10 minutes:
 
-The official hosted `libretranslate.com` endpoint requires an API key. If any LibreTranslate instance needs a key, LibreTranslate expects it in the request body as `api_key`, not as an auth header. Add it inside the template:
+<details>
+<summary><b>How to get a DeepL key</b></summary>
 
-```ini
-request_template={"q":"{text}","source":"{source}","target":"{target}","format":"text","api_key":"YOUR_LT_KEY"}
-```
+1. Go to [deepl.com/pro-api](https://www.deepl.com/pro-api) and sign up for **DeepL API Free**. They ask for a card to check you're a real person, but the free plan doesn't charge you.
+2. Once you're logged in, open your **Account** page and find **API Keys**.
+3. Copy the key (it ends in `:fx`).
+4. In the Companion app, open **Settings**, pick **DeepL**, paste the key, click **Test**, then **Save**.
+</details>
 
-Do not use `/wt customkey` or `/wt customauth` for LibreTranslate API keys.
+<details>
+<summary><b>How to get a Google Cloud key</b></summary>
 
-### Self-Hosting
+1. Go to [console.cloud.google.com](https://console.cloud.google.com/) and sign in.
+2. Create a new project (call it anything, like "WoW Translate").
+3. Search for **Cloud Translation API** and click **Enable**. Google asks you to add a billing account; the first 500,000 characters each month are free.
+4. Go to **APIs & Services**, then **Credentials**, then **Create credentials**, then **API key**. Copy the key.
+5. Recommended: click the key, choose **Restrict key**, and allow only **Cloud Translation API**. You can also set a monthly budget alert so you never get a surprise bill.
+6. In the Companion app, open **Settings**, pick **Google Cloud**, paste the key, click **Test**, then **Save**.
+</details>
 
-For a truly free, unlimited, reliable option, self-host LibreTranslate with Docker:
+Your key stays on your PC. On Windows, the app stores it encrypted so only your Windows account can read it.
 
-```bash
-docker run -ti --rm -p 5000:5000 libretranslate/libretranslate
-```
+### 3. Connect the game
 
-That starts LibreTranslate on local HTTP port `5000`. Put HTTPS in front of it with a reverse proxy or tunnel, then configure WoWTranslate with the public `https://.../translate` URL. Public community mirrors exist, but they are usually rate-limited and can be unreliable; self-hosting is the dependable free path.
+1. Play WoW in **Windowed** or **Windowed (Fullscreen)** mode (in the game's System > Graphics options). The app reads your screen, which doesn't work in exclusive fullscreen.
+2. In the game, type `/wt` and pick **Accurate**. You'll see a thin line of coloured squares in the top-left corner of your screen. That's how the addon sends chat to the app, so leave it visible.
+3. Click **Send a test** in the options. The app should show a test message within a second, and the light at the top of the app turns green.
 
----
+That's it. Translations now appear in the Companion window. Drag it next to your chat and make it as small or see-through as you like (in the app's **Settings**).
 
-## 📖 Commands
+**Replying:** type in the box at the bottom of the app and press **Enter**. It translates into the language of the last person who wrote, copies the result, and you paste it into WoW with **Ctrl+V**.
 
-All commands work through `/wt`; `/wowtranslate` is also registered as a longer alias.
+### Costs
 
-| Command | Description |
-|---------|-------------|
-| `/wt show` | Open the configuration panel. Aliases: `/wt config`, `/wt options`. |
-| `/wt hide` | Close the configuration panel. |
-| `/wt status` | Show DLL loaded state, provider, configured/ready state, last error, incoming/outgoing state, cache entries, cache hit rate, and pending requests. |
-| `/wt test <text>` | Test an incoming translation request. Defaults to `你好` when no text is supplied. |
-| `/wt on` / `/wt off` | Enable or disable incoming translation. Aliases: `/wt enable`, `/wt disable`. |
-| `/wt outgoing on/off` | Enable or disable outgoing translation. |
-| `/wt outchannel [type]` | Show or toggle outgoing channels: `WHISPER`, `PARTY`, `GUILD`, `RAID`, `SAY`, `YELL`, `BATTLEGROUND`, `CHANNEL`. |
-| `/wt prefix <text>` | Set the prefix used on outgoing translated messages. |
-| `/wt testout <text>` | Test outgoing translation without sending a chat message. |
-| `/wt provider google/openai/custom` | Select the active provider. |
-| `/wt googlekey <key>` | Store and apply a Google Cloud Translation API key. |
-| `/wt key <key>` | Deprecated alias for `/wt googlekey` when the active provider is Google. |
-| `/wt openaikey <key>` | Store an OpenAI-compatible provider key and switch to the OpenAI-compatible provider. |
-| `/wt openaiendpoint <url>` | Set the OpenAI-compatible chat completions endpoint. |
-| `/wt openaimodel <model>` | Set the OpenAI-compatible model. |
-| `/wt customendpoint <url>` | Set the custom HTTPS JSON provider endpoint. |
-| `/wt customkey <key>` | Store a custom provider key. |
-| `/wt customauth <header> <scheme>` | Set the custom provider auth header and scheme, such as `Authorization Bearer`. |
-| `/wt customtemplate <json>` | Set the custom provider request JSON template. |
-| `/wt custompath <path>` | Set the response path used to read translated text from a custom provider response. |
-| `/wt clearcache` | Clear the local translation cache. |
-| `/wt debug` | Toggle debug mode. |
-| `/wt log` | Print recent debug log entries. |
-| `/wt clearlog` | Clear the debug log. |
-| `/wt testlink` | Test hyperlink parsing. |
-| `/wt testitem [itemId]` | Test item hyperlink localization using client-cached item data. |
-| `/wt testquest [questId]` | Test quest hyperlink localization when a pfQuest database is available. |
+A character is one letter, space or symbol. As a rough example, a chat message is about 40 characters, so 500,000 characters is around 12,000 messages a month. Only messages in other languages are sent, and repeated messages are remembered instead of being sent again. The app shows how much you've used this month in **Settings**.
+
+If you watch a busy trade channel all day, you may go over the free amount. To stay safe, set a budget limit in your DeepL or Google account.
 
 ---
 
-## 🔧 How It Works
+## Is it safe? Can I get banned?
 
-```text
-WoW chat
-  -> Lua addon
-  -> glossary preprocessing
-  -> hyperlink preservation
-  -> local cache lookup
-  -> 32-bit WoWTranslate.dll
-  -> your configured HTTPS provider
-  -> translated chat display
-```
+- **The addon** is a normal addon. It only uses the tools Blizzard gives every addon: it reads chat, changes how chat lines look, and draws a few squares on screen.
+- **The Companion app** only looks at your screen, the same way a screenshot or streaming app does. It never reads the game's memory, never changes game files, and never presses keys or clicks for you.
+- The old vanilla (1.12) version of WoW Translate used a DLL loaded into the game. **This version doesn't.** Don't use DLL-based tools on WoW: Forever.
 
-The Lua addon handles chat events, channel settings, language settings, outgoing hooks, glossary preprocessing, hyperlink handling, cache lookups, and the in-game configuration panel.
+Blizzard doesn't officially approve any third-party app, so we can't promise anything on their behalf. WoW Translate is built to stay within what normal addons and screen-reading apps do.
 
-`WoWTranslate.dll` is loaded by the client through `dlls.txt`. It receives provider settings from the addon, performs HTTPS JSON requests from your local machine, and returns translated text to the addon. There is no WoWTranslate-hosted translation server in version 2.0.
+**If you stream:** the coloured line in Accurate mode is your chat written as colours. Someone with the app could decode it from your stream, including whispers. Switch to Quick mode while streaming if that matters to you.
 
 ---
 
-## 🎮 Language Settings
+## Good to know (WoW: Forever beta)
 
-Open settings with `/wt show`.
-
-| Setting | Details |
-|---------|---------|
-| **Provider** | Choose Google, OpenAI-compatible, or Custom HTTP. |
-| **Incoming Languages** | Defaults to Chinese -> English, configurable in the panel. |
-| **Outgoing Languages** | Defaults to English -> Chinese, configurable in the panel. |
-| **Incoming Channels** | Toggle Say, Yell, Whisper, Party, Guild, Raid, Battleground, and World/Local. |
-| **Outgoing Channels** | Toggle Whisper, Party, Guild, Raid, Say, Yell, Battleground, and World/Local. |
-| **AFK Behavior** | `Disable while AFK` is available in the panel and is enabled by default. |
-| **System Messages** | System/emote translation is available in the panel and is disabled by default. |
-
-The panel includes common provider fields. The full custom JSON body template is intentionally slash-command or INI-only because it is too long for the WoW 1.12 settings panel.
+- **The beta forgets addon settings when you restart the game.** This is a Blizzard bug that affects every addon. To keep your settings, tick **Remember my settings after restart** in `/wt`. This stores them in one macro called `WoWTranslate`. If Blizzard fixes the bug, the addon notices and removes the macro.
+- **Boss fights and rated matches:** during these, Blizzard hides other players' chat from all addons. Those lines are shown untouched, and translation starts again when the fight ends.
+- **Item, quest and spell links** are shown with their names in your language, using the game's own data, so those are always exact. If you haven't seen an item before, its name might stay in the other language the first time.
+- **Player names** written in other alphabets (like 小明 or Иван) show how to read them in Latin letters in their tooltip, for example "» Xiao Ming". This uses a feature built into the game client; if your client doesn't have it, nothing extra is shown. Their real name is never changed, so whispering and inviting still work.
 
 ---
 
-## 🤖 OpenAI-Compatible Provider
+## Commands
 
-Use this for OpenAI or any service that implements a compatible chat completions API.
-
-```text
-/wt provider openai
-/wt openaiendpoint https://api.openai.com/v1/chat/completions
-/wt openaimodel gpt-4.1-mini
-/wt openaikey YOUR_KEY
-/wt test 你好
-```
-
-The DLL sends a chat completion request with temperature `0` and a system instruction to translate only, preserve URLs/placeholders exactly, and return no commentary. It reads `choices[0].message.content`.
-
----
-
-## 🧩 Custom HTTPS JSON Provider
-
-Use this for any HTTPS JSON translation service.
-
-```text
-/wt provider custom
-/wt customendpoint https://example.com/translate
-/wt customkey YOUR_KEY
-/wt customauth Authorization Bearer
-/wt customtemplate {"text":"{text}","source":"{source}","target":"{target}"}
-/wt custompath data.translation
-/wt test 你好
-```
-
-Placeholders available in the request template:
-
-| Placeholder | Meaning |
-|-------------|---------|
-| `{text}` | Text to translate. |
-| `{source}` | Source language code. |
-| `{target}` | Target language code. |
-
-Response paths support object fields and array indexes, for example:
-
-```text
-translation
-data.translation
-choices[0].message.content
-```
+| Command | What it does |
+|---|---|
+| `/wt` | Open the options |
+| `/wt on` / `/wt off` | Turn translation on or off |
+| `/wt quick` / `/wt accurate` | Pick a mode |
+| `/wt to de` | Translate into a language (`auto`, `en`, `de`, `fr`, `es`, `pt`, `ru`, `ko`, `zh`, `ja`) |
+| `/wt write on` / `/wt write off` | Translate what you write |
+| `/wt test <text>` | See how a message would be translated |
+| `/wt link` | Help with Accurate mode (`/wt link test` sends a test to the app) |
+| `/wt remember` | Keep settings after restarting the game |
+| `/wt status` | Show what's on |
 
 ---
 
-## 📝 Optional WoWTranslate.ini
+## Something's not working?
 
-Place `WoWTranslate.ini` next to `WoWTranslate.dll` if you prefer not to type keys in chat. This file is local and ignored by git.
+**Nothing gets translated.**
+Type `/wt status`. Check that translation is on and the channel is ticked in `/wt`. Messages that are already in your language are left alone. Very short messages like "ok" or "gg" are left alone too.
 
-```ini
-[provider]
-type=google
+**The translation is weird.**
+In Quick mode that happens, since it translates phrase by phrase. Point at the [T] to see the original, or use Accurate mode.
 
-[google]
-api_key=AIza...
+**The Companion app says "Looking for WoW...".**
+Make sure Accurate mode is on (`/wt accurate`), the game is in Windowed or Windowed (Fullscreen) mode, and the coloured line in the corner of the screen isn't covered by another window. If you use a big UI scale or a custom UI, try `/wt link size 4` to make the squares bigger, or `/wt link corner tr` to move them to another corner.
 
-[openai]
-endpoint=https://api.openai.com/v1/chat/completions
-api_key=sk-...
-model=gpt-4.1-mini
-temperature=0
+**The app says my key was refused.**
+Copy the key again, without spaces. For Google, make sure the Cloud Translation API is enabled for your project.
 
-[custom]
-endpoint=https://example.com/translate
-api_key=...
-auth_header=Authorization
-auth_scheme=Bearer
-request_template={"text":"{text}","source":"{source}","target":"{target}"}
-response_path=translation
-```
-
-Valid provider types are `google`, `openai`, and `custom`.
+**My settings reset every time I start the game.**
+That's the beta bug described above. Tick **Remember my settings after restart** in `/wt`.
 
 ---
 
-## 🔐 Security
+## Looking for the vanilla (1.12) version?
 
-API keys are stored locally in plaintext if you save them through WoW SavedVariables or `WoWTranslate.ini`. Do not share your SavedVariables or INI file.
-
-For Google keys, restrict the key to `Cloud Translation API`. Application restrictions are harder for a desktop game DLL because browser and mobile app restrictions do not apply; IP restrictions only work well if you have a stable public IP. Use API restrictions plus low usage caps and budget alerts.
+The original WoW 1.12 edition, with its DLL, is kept in [`legacy/vanilla`](legacy/vanilla/README.md). It isn't needed for WoW: Forever and shouldn't be used there.
 
 ---
 
-## ❓ Troubleshooting
+## For developers
 
-| Problem | Check |
-|---------|-------|
-| DLL not loaded | Make sure `WoWTranslate.dll` is next to `WoW.exe` and listed in `dlls.txt`, then run `/wt status`. |
-| Google request fails | Confirm the Cloud Translation API is enabled, billing is enabled, the key is restricted to `Cloud Translation API`, and your quota has not been exhausted. |
-| Provider not ready | Run `/wt status` and check provider, configured/ready state, endpoint, HTTP status, and last error. |
-| No incoming translations | Run `/wt on`, check incoming language/channel settings in `/wt show`, then test with `/wt test 你好`. |
-| Outgoing translation does nothing | Run `/wt outgoing on`, confirm the target channel is enabled with `/wt outchannel`, and check that the DLL is loaded. |
-| Custom provider returns blank text | Verify `/wt custompath <path>` points to the translated text field in the JSON response. |
-| Costs are higher than expected | Set a Google quota cap and budget alert, leave outgoing translation off by default, and keep the local cache enabled. |
+How it works, the WoW: Forever API details it relies on, the Companion link format, tests and the release process are in **[docs/TECHNICAL.md](docs/TECHNICAL.md)**.
 
 ---
 
-## 🛠️ Building from Source
+## Support
 
-### Windows local build
+WoW Translate is free and open source. If it helps you make friends across languages, you can support it through [GitHub Sponsors](https://github.com/sponsors/sanjaygbhat).
 
-Requirements:
+## License
 
-- Windows
-- Visual Studio 2022 with C++ workload
-- CMake 3.20+
-
-```bat
-cd dll
-build.bat
-```
-
-Manual build:
-
-```bat
-cd dll
-mkdir build
-cd build
-cmake .. -G "Visual Studio 17 2022" -A Win32
-cmake --build . --config Release
-```
-
-Output:
-
-```text
-dll/build/bin/Release/WoWTranslate.dll
-```
-
-### macOS/Homebrew MinGW cross-compile
-
-For local cross-compiles, use the MinGW helper:
-
-```bash
-bash dll/build-mingw.sh
-```
-
-The script builds a 32-bit PE DLL with MinGW, verifies the output, and writes:
-
-```text
-dll/build/WoWTranslate.dll
-```
-
-It expects the MinGW toolchain to be available and, as written, copies the final DLL to the local client path configured inside the script.
-
-### GitHub Actions
-
-The Windows CI workflows build the 32-bit DLL on pushes and pull requests:
-
-- `.github/workflows/build-dll.yml` builds and packages `WoWTranslate.dll`, then uploads release/package artifacts.
-- `.github/workflows/build.yml` builds the DLL and uploads DLL/full-addon artifacts.
-
-Both workflows use the Visual Studio 2022 Win32 CMake path and produce `WoWTranslate.dll` from `dll/build/bin/Release/WoWTranslate.dll`.
-
----
-
-## ❤️ Support
-
-WoWTranslate is free and open source. If it makes your cross-language adventures better,
-you can support development through
-[GitHub Sponsors](https://github.com/sponsors/sanjaygbhat) — one-time or monthly, and 100%
-of personal sponsorships go to the developer.
-
----
-
-## 📄 License
-
-MIT License
-
----
-
-<p align="center">
-  <sub>Made for the WoW 1.12 community. Bring your own provider key, keep control of your own bill.</sub>
-</p>
+MIT. See [LICENSE](LICENSE).

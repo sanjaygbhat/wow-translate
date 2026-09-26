@@ -1,0 +1,55 @@
+name: Tests and builds
+
+on:
+  push:
+    branches: [main, master, 'claude/**']
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  addon:
+    name: Addon tests and package
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install Lua 5.1 (the Lua version WoW uses)
+        run: sudo apt-get update && sudo apt-get install -y lua5.1
+      - name: Check every Lua file compiles
+        run: find Interface -name '*.lua' -print0 | xargs -0 -n1 luac5.1 -p
+      - name: Dictionaries
+        run: lua5.1 tests/check_dictionaries.lua
+      - name: Addon test harness (mocked WoW Forever client)
+        run: lua5.1 tests/harness.lua
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Companion tests
+        run: python -m unittest discover -s companion/tests -v
+      - name: Build the addon zip
+        run: python scripts/package_addon.py
+      - uses: actions/upload-artifact@v4
+        with:
+          name: WoWTranslate-addon
+          path: dist/*.zip
+          if-no-files-found: error
+
+  companion:
+    name: Companion app (Windows)
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Tests
+        run: python -m unittest discover -s companion/tests -v
+      - name: Build WoWTranslateCompanion.exe
+        working-directory: companion
+        run: |
+          python -m pip install --upgrade pip pyinstaller
+          pyinstaller --noconfirm --onefile --windowed --name WoWTranslateCompanion run_companion.py
+      - uses: actions/upload-artifact@v4
+        with:
+          name: WoWTranslateCompanion-windows
+          path: companion/dist/WoWTranslateCompanion.exe
+          if-no-files-found: error

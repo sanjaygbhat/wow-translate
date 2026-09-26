@@ -1,11 +1,13 @@
-name: Build & Package WoWTranslate
+# Legacy: the old WoW 1.12 (vanilla) edition with its DLL. Kept for existing
+# vanilla players; the WoW: Forever edition does not use a DLL.
+name: Legacy vanilla 1.12 build
 
 on:
   push:
-    branches: [main]
-    tags: ['v*']
+    tags: ['vanilla-v*']
+    paths: ['legacy/vanilla/**']
   pull_request:
-    branches: [main]
+    paths: ['legacy/vanilla/**']
   workflow_dispatch:
 
 permissions:
@@ -23,28 +25,28 @@ jobs:
       uses: microsoft/setup-msbuild@v2
 
     - name: Configure CMake
-      working-directory: dll
+      working-directory: legacy/vanilla/dll
       run: |
         mkdir build
         cd build
         cmake .. -G "Visual Studio 17 2022" -A Win32
 
     - name: Build DLL
-      working-directory: dll/build
+      working-directory: legacy/vanilla/dll/build
       run: cmake --build . --config Release
 
     - name: Upload DLL
       uses: actions/upload-artifact@v4
       with:
         name: WoWTranslate-dll
-        path: dll/build/bin/Release/WoWTranslate.dll
+        path: legacy/vanilla/dll/build/bin/Release/WoWTranslate.dll
         if-no-files-found: error
 
     - name: Create Release Package
       run: |
         mkdir WoWTranslate
-        copy dll\build\bin\Release\WoWTranslate.dll WoWTranslate\
-        xcopy Interface\AddOns\WoWTranslate WoWTranslate\Interface\AddOns\WoWTranslate\ /E /I /Q
+        copy legacy\vanilla\dll\build\bin\Release\WoWTranslate.dll WoWTranslate\
+        xcopy legacy\vanilla\Interface\AddOns\WoWTranslate WoWTranslate\Interface\AddOns\WoWTranslate\ /E /I /Q
         echo WoWTranslate Installation> WoWTranslate\INSTALL.txt
         echo =========================>> WoWTranslate\INSTALL.txt
         echo.>> WoWTranslate\INSTALL.txt
@@ -67,21 +69,21 @@ jobs:
 
     - name: Create Release ZIP
       run: |
-        Compress-Archive -Path WoWTranslate/* -DestinationPath WoWTranslate-2.0-${{ github.run_number }}.zip
+        Compress-Archive -Path WoWTranslate/* -DestinationPath WoWTranslate-vanilla-2.0-${{ github.run_number }}.zip
       shell: pwsh
 
     - name: Upload Release ZIP
       uses: actions/upload-artifact@v4
       with:
         name: WoWTranslate-release-zip
-        path: WoWTranslate-2.0-${{ github.run_number }}.zip
+        path: WoWTranslate-vanilla-2.0-${{ github.run_number }}.zip
         if-no-files-found: error
 
     - name: Publish Release (on tag)
       if: startsWith(github.ref, 'refs/tags/')
       uses: softprops/action-gh-release@v1
       with:
-        files: WoWTranslate-2.0-${{ github.run_number }}.zip
+        files: WoWTranslate-vanilla-2.0-${{ github.run_number }}.zip
         generate_release_notes: true
       env:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

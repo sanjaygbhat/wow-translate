@@ -35,3 +35,14 @@ WoWTranslate.ini
 
 # WoW SavedVariables (for testing)
 WTF/
+
+# Python
+__pycache__/
+*.pyc
+companion/build/
+companion/dist/
+*.spec
+
+# Build output and generated test data
+dist/
+tests/link_frames.txt
