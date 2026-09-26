@@ -119,6 +119,11 @@ local function ReadMacro()
 end
 
 local function DeleteMacroCopy()
+    if InCombatLockdown and InCombatLockdown() then
+        P.deleteAfterCombat = true
+        return
+    end
+    P.deleteAfterCombat = false
     local index = MacroIndex()
     if index > 0 then pcall(DeleteMacro, index) end
 end
@@ -193,6 +198,9 @@ WT.RegisterEvent("PLAYER_ENTERING_WORLD", function()
     end
 end)
 WT.RegisterEvent("PLAYER_REGEN_ENABLED", function()
+    if P.deleteAfterCombat and not (WT.db and WT.db.rememberViaMacro) then
+        DeleteMacroCopy()
+    end
     if P.afterCombat then
         P.afterCombat = false
         WriteSoon()

@@ -136,6 +136,14 @@ function WT.LocalizeLink(seg)
     local ltype, id = match(link.data, "^(%a+):(%d+)")
     local resolve = ltype and RESOLVERS[ltype]
     if not resolve then return nil end
+    if ltype == "item" then
+        -- item:id:enchant:gem1:gem2:gem3:gem4:suffix:unique:level:spec:mods:context:numBonus:...
+        -- Random-suffix or bonus items ("... of the Monkey") would lose part of
+        -- their name, so they keep the name the sender's client gave them.
+        local f = {}
+        for v in string.gmatch(link.data .. ":", "([^:]*):") do f[#f + 1] = v end
+        if (tonumber(f[8]) or 0) ~= 0 or (tonumber(f[14]) or 0) > 0 then return nil end
+    end
     local name = resolve(tonumber(id))
     if not name then return nil end
     local text = link.text
@@ -165,11 +173,12 @@ end
 -- Whole-message Quick translation
 -- ---------------------------------------------------------------------------
 -- Returns: newMessage (or nil if nothing useful changed), score 0..1
-function WT.TranslateMessage(msg, from, to)
+-- keepLinks: never rewrite link names (used for text you send).
+function WT.TranslateMessage(msg, from, to, keepLinks)
     local segs = WT.SplitMessage(msg)
     local changed = false
     local weighted, weight = 0, 0
-    local localize = WT.db and WT.db.localizeLinks
+    local localize = WT.db and WT.db.localizeLinks and not keepLinks
 
     for i = 1, #segs do
         local seg = segs[i]

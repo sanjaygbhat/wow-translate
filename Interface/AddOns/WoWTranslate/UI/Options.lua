@@ -78,6 +78,7 @@ local guide
 local function ShowGuide()
     if not guide then
         guide = CreateFrame("Frame", "WoWTranslateSetupGuide", UIParent, "ButtonFrameTemplate")
+        guide:Hide()
         ButtonFrameTemplate_HidePortrait(guide)
         ButtonFrameTemplate_HideAttic(guide)
         ButtonFrameTemplate_HideButtonBar(guide)
@@ -127,6 +128,7 @@ WT.ShowSetupGuide = ShowGuide
 -- ---------------------------------------------------------------------------
 local function Build()
     frame = CreateFrame("Frame", "WoWTranslateOptionsFrame", UIParent, "ButtonFrameTemplate")
+    frame:Hide()   -- new frames start shown; ToggleOptions would hide it again
     ButtonFrameTemplate_HidePortrait(frame)
     ButtonFrameTemplate_HideAttic(frame)
     ButtonFrameTemplate_HideButtonBar(frame)
@@ -254,7 +256,8 @@ WT.On("LOGIN", function()
     open:SetPoint("TOPLEFT", text, "BOTTOMLEFT", 0, -14)
     open:SetText(L.BUTTON_OPEN_OPTIONS)
     open:SetScript("OnClick", function()
-        if SettingsPanel and SettingsPanel:IsShown() then HideUIPanel(SettingsPanel) end
+        -- HideUIPanel is blocked for addons in combat; then just leave it open.
+        if SettingsPanel and SettingsPanel:IsShown() and not InCombatLockdown() then HideUIPanel(SettingsPanel) end
         WT.ShowOptions()
     end)
     local ok, category = pcall(Settings.RegisterCanvasLayoutCategory, panel, "WoW Translate")

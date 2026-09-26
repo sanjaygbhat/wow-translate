@@ -314,6 +314,10 @@ do
     contains(res, "[Thunderfury, Blessed Blade of the Windseeker]", "English line still gets its item link localized")
     notcontains(res, "|Haddon:WoWTranslate", "links-only change carries no [T] marker")
 
+    local suffixItem = "|cff1eff00|Hitem:2589::::::612::60:::::|h[亚麻布之猴]|h|r"
+    res = Chat("CHAT_MSG_CHANNEL", "出 " .. suffixItem, "Li")
+    contains(res, suffixItem, "random-suffix item keeps its full name")
+
     local unknownItem = "|cffa335ee|Hitem:99999::::::::60:::::|h[某物品]|h|r"
     res = Chat("CHAT_MSG_CHANNEL", "收 " .. unknownItem, "Li")
     contains(res, unknownItem, "uncached item link kept byte-for-byte")
@@ -384,6 +388,9 @@ do
     eq(box:GetText(), "hello", "outgoing respects channel choice (guild off by default)")
     WT.Set("outgoingTo", "auto")
 
+    local withLink = "hello |cnIQ5:|Hitem:19019::::::::60:::::|h[雷霆之怒]|h|r"
+    local sentOut = WT.TranslateOutgoing(withLink, "zh")
+    check(sentOut == nil or sentOut:find("[雷霆之怒]", 1, true), "outgoing never rewrites link names")
     local long = string.rep("hello ", 80)
     local out = WT.TranslateOutgoing(long, "zh")
     check(out == nil or #out <= 255, "outgoing never exceeds the 255-byte chat limit")
@@ -533,8 +540,13 @@ end
 -- UI, commands, minimap, compartment
 -- ===========================================================================
 do
-    local ok, err = pcall(WT.ShowOptions)
+    local ok, err = pcall(WT.ToggleOptions)
     check(ok, "options window builds", err)
+    check(_G.WoWTranslateOptionsFrame and _G.WoWTranslateOptionsFrame:IsShown(), "first /wt opens the options (does not hide them)")
+    WT.ToggleOptions()
+    check(not _G.WoWTranslateOptionsFrame:IsShown(), "second /wt closes the options")
+    ok, err = pcall(WT.ShowOptions)
+    check(ok, "options window shows", err)
     ok, err = pcall(WT.ShowSetupGuide)
     check(ok, "setup guide builds", err)
     for _, cmd in ipairs({ "", "help", "status", "test", "test 法师快撤", "test hello friend", "quick", "accurate",

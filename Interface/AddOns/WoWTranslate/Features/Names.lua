@@ -51,7 +51,7 @@ local MARK = "|cff66bbff\194\187 %s|r"   -- » Name
 local function NameFromUnit(tooltip)
     if not tooltip or not tooltip.GetUnit then return nil end
     local ok, _, unit = pcall(tooltip.GetUnit, tooltip)
-    if not ok or not unit or not WT.CanRead(unit) then return nil end
+    if not ok or not WT.CanRead(unit) or not unit then return nil end
     if not (UnitIsPlayer and UnitIsPlayer(unit)) then return nil end
     local name = UnitName(unit)
     if not WT.CanRead(name) then return nil end
@@ -72,7 +72,7 @@ end
 local chatTipShown = false
 local function OnLinkEnter(_, chatFrame, link)
     local db = WT.db
-    if not db or not db.romanizeNames or type(link) ~= "string" then return end
+    if not db or not db.romanizeNames or not WT.CanRead(link) or type(link) ~= "string" then return end
     local name = string.match(link, "^player:([^:]+)")
     if not name then return end
     local short = Ambiguate and Ambiguate(name, "none") or name

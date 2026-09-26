@@ -54,7 +54,10 @@ local function Marker(lineID)
 end
 
 local function IsAFK()
-    return UnitIsAFK and UnitIsAFK("player") and true or false
+    if not UnitIsAFK then return false end
+    local afk = UnitIsAFK("player")      -- can be secret during chat lockdown
+    if not WT.CanRead(afk) then return false end
+    return afk and true or false
 end
 
 -- Work out what to show for one chat line. Returns an entry table or false.
@@ -158,7 +161,7 @@ local function LangName(code)
 end
 
 local function OnLinkEnter(_, chatFrame, link)
-    if type(link) ~= "string" then return end
+    if not WT.CanRead(link) or type(link) ~= "string" then return end
     local id = match(link, "^addon:WoWTranslate:o:(%d+)")
     if not id then return end
     local e = memo[tonumber(id)]
@@ -186,7 +189,7 @@ local function OnLinkLeave()
 end
 
 local function OnLinkClick(_, link, text, button, chatFrame)
-    if type(link) ~= "string" then return end
+    if not WT.CanRead(link) or type(link) ~= "string" then return end
     local id = match(link, "^addon:WoWTranslate:o:(%d+)")
     if not id then return end
     local e = memo[tonumber(id)]

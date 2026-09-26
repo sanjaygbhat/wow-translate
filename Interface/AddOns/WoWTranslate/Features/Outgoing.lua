@@ -46,7 +46,7 @@ function WT.TranslateOutgoing(text, to)
     local from = WT.ClientLang()
     if not to or to == from then return nil end
     if WT.DetectLanguage(text) == to then return nil end   -- already in their language
-    local out, score = WT.TranslateMessage(text, from, to)
+    local out, score = WT.TranslateMessage(text, from, to, true)
     if not out or score < MIN_SCORE then
         WT.Debug("outgoing skipped, score", score)
         return nil, score
@@ -54,7 +54,10 @@ function WT.TranslateOutgoing(text, to)
     if WT.db.outgoingTag then
         out = (TAGS[to] or TAGS.en) .. " " .. out
     end
-    return T.truncate(out, MAX_BYTES), score
+    -- Too long for one chat line: cutting it could break a link, so the
+    -- player's own text is sent instead.
+    if #out > MAX_BYTES then return nil, score end
+    return out, score
 end
 
 local function OnPreSend(_, editBox)
